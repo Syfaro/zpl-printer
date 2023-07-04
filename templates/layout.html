@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+
+  <title>ZPL Printer</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2.0.0-alpha1/css/pico.min.css"
+    integrity="sha384-1AyNt+gvQHcZl8QNN0ZU287lhjHxZS5By0ICf9KbOLmvL85BvhK/kB/wGo2DB1eg" crossorigin="anonymous">
+
+  <style>
+    .w-100 {
+      width: 100%;
+    }
+
+    .p-1 {
+      padding: 1rem;
+    }
+
+    .text-center {
+      text-align: center;
+    }
+
+    .text-end {
+      text-align: end;
+    }
+  </style>
+</head>
+
+<body hx-ext="morph,loading-states">
+  <div class="container">
+    <nav>
+      <ul>
+        <li><a href="/"><strong>ZPL Printer</strong></a></li>
+      </ul>
+
+      <ul>
+        <li><a href="/labels">Labels</a></li>
+        <li><a href="/playground">Playground</a></li>
+      </ul>
+    </nav>
+  </div>
+
+  {% block content %}{% endblock %}
+
+  <script src="https://unpkg.com/htmx.org@1.9.2"
+    integrity="sha384-L6OqL9pRWyyFU3+/bjdSri+iIphTN/bvYyM37tICVyOJkWZLpP2vGn6VUEXgzg6h"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.2/dist/ext/loading-states.js"
+    integrity="sha384-c9yRZhqcxALJZmPcfzR5qIOTcXY5etOcZOWY9gkQ5J6XOnlWc3yV8fhwM0OLlTQI"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/idiomorph@0.0.8/dist/idiomorph-ext.min.js"
+    integrity="sha384-peFeU0VXEwPvnSJ/vdU71OoWTxs6qc5qTO0yrFxl4RJ+4lh4sfqdBPCz39BpG+yE"
+    crossorigin="anonymous"></script>
+</body>
+
+</html>

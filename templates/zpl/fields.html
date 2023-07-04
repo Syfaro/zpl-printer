@@ -1,0 +1,7 @@
+{% for (name, value) in fields %}
+<label>
+  {{ name }}
+  <input type="text" name="{{ name }}" value="{{ value }}" class="editor-field" hx-post="/playground"
+    hx-trigger="keyup changed delay:500ms" data-loading-aria-busy data-loading-target="#editor-button">
+</label>
+{% endfor %}

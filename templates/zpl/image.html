@@ -1,0 +1,7 @@
+{% match preview %}
+{% when Some with (preview) %}
+<figure class="text-center p-1">
+  <img src="{{ preview }}">
+</figure>
+{% else %}
+{% endmatch %}

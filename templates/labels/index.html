@@ -1,0 +1,135 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<main class="container">
+  <section>
+    <h1>Labels</h1>
+
+    {% if labels.is_empty() %}
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">ID</th>
+          <th scope="col">Size</th>
+          <th><span aria-label="Actions"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for (label, label_size) in labels %}
+        <tr>
+          <th scope="row">{{ label.name }}</th>
+          <td><code>{{ label.id.as_url() }}</code></td>
+          <td>{{ label_size.width }}&times;{{ label_size.height }} in</td>
+          <td class="text-end">
+            <a href="/playground/{{ label.id.as_url() }}" class="contrast" role="button">Edit</a>
+            <button class="outline secondary" hx-delete="/labels/{{ label.id.as_url() }}"
+              hx-confirm="Are you sure you want to delete {{ label.name }}?">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <a href="/playground" role="button">Visit Playground</a>
+  </section>
+
+  <section>
+    <h2>Label Sizes</h2>
+
+    {% if label_sizes.is_empty() %}
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Width</th>
+          <th scope="col">Height</th>
+          <th><span aria-label="Actions"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for size in label_sizes %}
+        <tr>
+          <td>{{ size.width }} in</td>
+          <td>{{ size.height }} in</th>
+          <td class="text-end">
+            <button class="outline secondary" hx-delete="/label_sizes/{{ size.id.as_url() }}"
+              hx-confirm="Are you sure you want to delete this size?">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <form method="post" action="/label_sizes">
+      <fieldset class="grid">
+        <input type="number" name="width" placeholder="Width (inches)" required inputmode="numeric" step="any">
+        <input type="number" name="height" placeholder="Height (inches)" required inputmode="numeric" step="any">
+        <button type="submit">Add</button>
+      </fieldset>
+    </form>
+  </section>
+
+  <section>
+    <h2>Printers</h2>
+
+    {% if printers.is_empty() %}
+    {% else %}
+    <figure>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">ID</th>
+            <th scope="col">Address</th>
+            <th scope="col">Density</th>
+            <th scope="col">Label Size</th>
+            <th><span aria-label="Actions"></span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for (printer, label_size) in printers %}
+          <tr>
+            <th scope="row">{{ printer.name }}</th>
+            <td><code>{{ printer.id.as_url() }}</code></td>
+            <td><code>{{ printer.address }}</code></td>
+            <td>{{ printer.dpmm }}&nbsp;dpmm</td>
+            <td>
+              {% match label_size %}
+              {% when Some with (label_size) %}
+              {{ label_size.width }}&times;{{ label_size.height }}&nbsp;in
+              {% else %}
+              Unknown
+              {% endmatch %}
+            </td>
+            <td class="text-end">
+              <a href="/printers/{{ printer.id.as_url() }}" class="contrast" role="button">Edit</a>
+              <button class="outline secondary" hx-delete="/printers/{{ printer.id.as_url() }}"
+                hx-confirm="Are you sure you want to delete {{ printer.name }}?">Delete</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </figure>
+    {% endif %}
+
+    <form method="post" action="/printers">
+      <fieldset class="grid">
+        <input type="text" name="name" placeholder="Name" required>
+        <input type="text" name="address" placeholder="Address" required>
+        <select name="dpmm" required>
+          <option value="6">6 dpmm (152 dpi)</option>
+          <option value="8" selected>8 dpmm (203 dpi)</option>
+          <option value="12">12 dpmm (300 dpi)</option>
+          <option value="24">24 dpmm (600 dpi)</option>
+        </select>
+        <button type="submit">Add</button>
+      </fieldset>
+    </form>
+  </section>
+</main>
+{% endblock %}

@@ -1,0 +1,3 @@
+{% macro dpmm(name, value, selected) %}
+  <option value="{{ value }}" {% if selected == value %}selected{% endif %}>{{ name }}</option>
+{% endmacro %}

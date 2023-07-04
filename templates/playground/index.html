@@ -1,0 +1,16 @@
+{% import "macros.html" as macros %}
+
+{% extends "layout.html" %}
+
+{% block content %}
+  <section class="container">
+    {% match label %}
+    {% when Some with (label) %}
+    <h1>{{ label.name }}</h1>
+    {% else %}
+    <h1>Label Playground</h1>
+    {% endmatch%}
+  </section>
+
+  {% include "zpl/editor.html" %}
+{% endblock %}

@@ -1,0 +1,130 @@
+<main class="container-fluid">
+  <form method="post" hx-swap="morph:innerHTML">
+    <div class="grid">
+      <fieldset hx-target="#editor-fields">
+        <label>
+          ZPL
+          <textarea id="zpl" name="_zpl" hx-post="/playground" hx-trigger="keyup change delay:500ms"
+            data-loading-aria-busy data-loading-target="#editor-button">{{ zpl }}</textarea>
+        </label>
+
+        <label>
+          Density
+          {% set selected_dpmm = self.selected_dpmm() %}
+
+          <select name="_dpmm" hx-post="/playground" hx-trigger="change">
+            {% include "zpl/dpmm.html" %}
+          </select>
+        </label>
+
+        <label>
+          Label Size
+          <select name="_label_size_id" hx-post="/playground" hx-trigger="change">
+            {% set selected_size_id = self.selected_size() %}
+            {% for size in label_sizes %}
+            <option value="{{ size.id.as_url() }}" {% if size.id == selected_size_id %}selected{% endif %}>
+              {{ size.width }}&times;{{ size.height }}&nbsp;in
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <div class="text-center">
+          {% match label %}
+          {% when Some with (label) %}
+          <input type="hidden" name="_id" value="{{ label.id.as_url() }}">
+          <button id="editor-save" type="submit" hx-put="/labels/{{ label.id.as_url() }}" formmethod="put"
+            formaction="/labels/{{ label.id.as_url() }}">Update Label</button>
+          {% else %}
+          <button id="editor-save" type="submit" hx-post="/labels" hx-prompt="What would you like to call this label?"
+            formaction="/labels">Save Label</button>
+          {% endmatch %}
+          <button id="editor-button" class="contrast" type="submit">Refresh Preview</button>
+        </div>
+
+        <details class="dropdown">
+          <summary role="button" class="secondary">Print</summary>
+          <ul>
+            {% for printer in printers %}
+            <li>
+              <a href="#" hx-post="/playground/print/{{ printer.id.as_url() }}" data-loading-aria-busy>{{ printer.name }}</a>
+            </li>
+            {% endfor %}
+          </ul>
+        </details>
+      </fieldset>
+
+      <fieldset id="editor-fields" hx-target="#editor-fields">
+        {{ fields|safe }}
+      </fieldset>
+
+      <div>
+        <div id="preview">
+          {% include "zpl/image.html" %}
+        </div>
+
+        <div id="rendered">
+          {% include "zpl/rendered.html" %}
+        </div>
+      </div>
+    </div>
+  </form>
+</main>
+
+<script>
+  const zpl = document.getElementById("zpl");
+
+  setTextAreaHeight(zpl);
+
+  zpl.addEventListener("input", (ev) => setTextAreaHeight(ev.target), {
+    passive: true,
+  });
+
+  function setTextAreaHeight(target) {
+    target.style.height = "auto";
+    target.style.height = (target.scrollHeight + 3) + "px";
+  }
+
+  const ids = document.getElementsByName("_id");
+  if (ids.length === 1) {
+    const labelId = ids[0].value;
+
+    restoreFields(labelId);
+    document.addEventListener("keyup", (ev) => keyUp(ev, labelId), { passive: true });
+  }
+
+  function restoreFields(labelId) {
+    const key = `fields-${labelId}`;
+    const existing = localStorage.getItem(key);
+    if (!existing) {
+      return;
+    }
+
+    const data = JSON.parse(existing);
+
+    for (const [key, value] of Object.entries(data)) {
+      const elems = document.getElementsByName(key);
+      if (!elems) {
+        continue;
+      }
+
+      elems[0].value = value;
+    }
+  }
+
+  function keyUp(ev, labelId) {
+    const target = ev.target;
+    if (!target.classList.contains("editor-field")) {
+      return;
+    }
+
+    const key = `fields-${labelId}`;
+
+    let existing = localStorage.getItem(key);
+    existing = existing ? JSON.parse(existing) : {};
+
+    existing[target.name] = target.value;
+
+    localStorage.setItem(key, JSON.stringify(existing));
+  }
+</script>

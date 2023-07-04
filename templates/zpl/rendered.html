@@ -1,0 +1,6 @@
+{% match rendered %}
+{% when Ok with (zpl) %}
+<code class="w-100"><pre>{{ zpl }}</pre></code>
+{% when Err with (err) %}
+<div>{{ err }}</div>
+{% endmatch %}

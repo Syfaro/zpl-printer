@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::State,
-    http::{Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode},
     routing::post,
     Json, Router,
 };
@@ -39,7 +39,7 @@ struct PrintJson {
 async fn print(
     State(state): State<Arc<AppState>>,
     Json(data): Json<PrintJson>,
-) -> Result<StatusCode, AppError> {
+) -> Result<(StatusCode, HeaderMap), AppError> {
     let printer = printer::Entity::find_by_id(data.printer_id)
         .one(&state.db)
         .await?
@@ -50,7 +50,10 @@ async fn print(
         .await?
         .ok_or_else(|| eyre::eyre!("unknown label"))?;
 
-    send_print_job(printer, label, data.fields).await?;
+    let id = send_print_job(&state.db, printer, label, data.fields, state.skip, true).await?;
 
-    Ok(StatusCode::NO_CONTENT)
+    let mut headers = HeaderMap::with_capacity(1);
+    headers.insert("x-history-id", HeaderValue::from_str(&id.to_string())?);
+
+    Ok((StatusCode::NO_CONTENT, headers))
 }

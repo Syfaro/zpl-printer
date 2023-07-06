@@ -22,6 +22,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub image_cache: Mutex<LruCache<[u8; 32], Vec<u8>>>,
     pub client: reqwest::Client,
+    pub skip: bool,
 }
 
 #[derive(Debug, Default, PartialEq)]

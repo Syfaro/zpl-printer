@@ -526,10 +526,17 @@ async fn playground_print(
         .await?
         .ok_or_else(|| eyre::eyre!("unknown printer"))?;
 
+    let (label_id, real_label) = if let Some(id) = form.id {
+        (id.into(), true)
+    } else {
+        (Uuid::now_v7(), false)
+    };
+
     send_print_job(
+        &state.db,
         printer,
         label::Model {
-            id: form.id.map(Into::into).unwrap_or_else(Uuid::now_v7),
+            id: label_id,
             name: "".to_string(),
             label_size_id: form
                 .label_size_id
@@ -539,6 +546,8 @@ async fn playground_print(
             zpl: form.zpl,
         },
         form.fields,
+        state.skip,
+        real_label,
     )
     .await?;
 

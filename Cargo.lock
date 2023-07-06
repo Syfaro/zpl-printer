@@ -3524,6 +3524,7 @@ dependencies = [
  "rust_decimal_macros",
  "sea-orm",
  "serde",
+ "serde_json",
  "serde_with",
  "sha2",
  "tera",

@@ -36,7 +36,7 @@ impl MigrationTrait for Migration {
 }
 
 #[derive(Iden)]
-enum Printer {
+pub enum Printer {
     Table,
     Id,
     Name,

@@ -4,7 +4,7 @@ use axum::{Router, Server};
 use axum_prometheus::PrometheusMetricLayer;
 use clap::Parser;
 use lru::LruCache;
-use sea_orm::Database;
+use sea_orm::{ActiveValue::NotSet, Database, DatabaseConnection, EntityTrait, Set};
 use sha2::{Digest, Sha256};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::Mutex};
 use tower_http::trace::{DefaultOnRequest, DefaultOnResponse};
@@ -12,6 +12,9 @@ use tracing::{instrument, Level};
 
 use entities::{label, label_size, printer};
 use migration::{Migrator, MigratorTrait};
+use uuid::Uuid;
+
+use crate::entities::history;
 
 mod entities;
 mod template;
@@ -33,6 +36,7 @@ async fn main() -> eyre::Result<()> {
         db,
         image_cache: Mutex::new(LruCache::new(config.cached_images)),
         client: Default::default(),
+        skip: config.skip,
     });
 
     let (prom_layer, metrics_handler) = PrometheusMetricLayer::pair();
@@ -71,6 +75,9 @@ struct Config {
     /// Maximum number of cached images.
     #[clap(long, env, default_value = "64")]
     cached_images: NonZeroUsize,
+    /// Skip printing labels, for testing.
+    #[clap(short, long, env)]
+    skip: bool,
 }
 
 struct AppError(eyre::Error);
@@ -130,12 +137,15 @@ async fn render_zpl(
     Ok(data.to_vec())
 }
 
-#[tracing::instrument(skip_all, fields(printer_id = %printer.id, label_id = %label.id))]
+#[tracing::instrument(skip_all, fields(printer_id = %printer.id, label_id = %label.id, skip))]
 async fn send_print_job(
+    db: &DatabaseConnection,
     printer: printer::Model,
     label: label::Model,
     variables: HashMap<String, String>,
-) -> eyre::Result<()> {
+    skip: bool,
+    real_label: bool,
+) -> eyre::Result<Uuid> {
     if printer.label_size_id.is_some() && printer.label_size_id != Some(label.label_size_id) {
         return Err(eyre::eyre!("label size does not match printer"));
     }
@@ -147,18 +157,38 @@ async fn send_print_job(
         .filter(|(_key, value)| !value.is_empty())
         .collect();
 
+    let label_id = if real_label { Some(label.id) } else { None };
+
+    let history = history::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        printer_id: Set(Some(printer.id)),
+        label_id: Set(label_id),
+        zpl: Set(label.zpl.clone()),
+        variables: Set(serde_json::to_value(variables.clone())?),
+        printed_at: NotSet,
+    };
+
+    let history_id = history::Entity::insert(history)
+        .exec(db)
+        .await?
+        .last_insert_id;
+
     let context = tera::Context::from_serialize(variables)?;
     let data = template::render_label(&label.zpl, &context)?;
 
     tracing::trace!("printing data: {data}");
 
-    let mut conn = TcpStream::connect(printer.address).await?;
-    conn.write_all(data.as_bytes()).await?;
-    conn.shutdown().await?;
+    if skip {
+        tracing::warn!("skipping print");
+    } else {
+        let mut conn = TcpStream::connect(printer.address).await?;
+        conn.write_all(data.as_bytes()).await?;
+        conn.shutdown().await?;
+    }
 
     tracing::info!("finished print job");
 
     axum_prometheus::metrics::increment_counter!("zpl_printer_print_total");
 
-    Ok(())
+    Ok(history_id)
 }

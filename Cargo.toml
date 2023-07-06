@@ -1,7 +1,12 @@
 [package]
+authors = ["Syfaro <syfaro@huefox.com>"]
 name = "zpl-printer"
 version = "0.1.0"
 edition = "2021"
+publish = false
+
+[package.metadata.release]
+sign-tag = true
 
 [dependencies]
 askama = { version = "0.12.0", features = ["with-axum"] }

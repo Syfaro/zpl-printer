@@ -24,6 +24,7 @@ use sea_orm::{
 };
 use serde::Deserialize;
 use serde_with::{serde_as, NoneAsEmptyString};
+use tap::TapFallible;
 use tokio::try_join;
 use uuid::Uuid;
 
@@ -404,16 +405,15 @@ async fn playground(
         _ => zpl,
     };
 
-    let label_sizes = label_size::Entity::find()
-        .order_by_asc(label_size::Column::Width)
-        .order_by_asc(label_size::Column::Height)
-        .all(&state.db)
-        .await?;
-
-    let printers = printer::Entity::find()
-        .order_by_asc(printer::Column::Name)
-        .all(&state.db)
-        .await?;
+    let (label_sizes, printers) = try_join!(
+        label_size::Entity::find()
+            .order_by_asc(label_size::Column::Width)
+            .order_by_asc(label_size::Column::Height)
+            .all(&state.db),
+        printer::Entity::find()
+            .order_by_asc(printer::Column::Name)
+            .all(&state.db)
+    )?;
 
     let label_size_id =
         label_size_id.or_else(|| label.as_ref().map(|label| label.label_size_id.into()));
@@ -474,6 +474,7 @@ async fn playground(
     let image = if let Ok(zpl) = &rendered {
         render_zpl(&state.image_cache, &state.client, zpl, &label_size, dpmm)
             .await
+            .tap_err(|err| tracing::error!("could not get zpl preview: {err}"))
             .ok()
             .as_deref()
             .map(encode_image_html)

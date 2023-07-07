@@ -159,12 +159,15 @@ async fn send_print_job(
 
     let label_id = if real_label { Some(label.id) } else { None };
 
+    let context = tera::Context::from_serialize(variables.clone())?;
+    let data = template::render_label(&label.zpl, &context)?;
+
     let history = history::ActiveModel {
         id: Set(Uuid::now_v7()),
         printer_id: Set(Some(printer.id)),
         label_id: Set(label_id),
-        zpl: Set(label.zpl.clone()),
-        variables: Set(serde_json::to_value(variables.clone())?),
+        zpl: Set(data.clone()),
+        variables: Set(serde_json::to_value(variables)?),
         printed_at: NotSet,
     };
 
@@ -172,9 +175,6 @@ async fn send_print_job(
         .exec(db)
         .await?
         .last_insert_id;
-
-    let context = tera::Context::from_serialize(variables)?;
-    let data = template::render_label(&label.zpl, &context)?;
 
     tracing::trace!("printing data: {data}");
 

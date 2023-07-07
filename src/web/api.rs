@@ -53,7 +53,10 @@ async fn print(
     let id = send_print_job(&state.db, printer, label, data.fields, state.skip, true).await?;
 
     let mut headers = HeaderMap::with_capacity(1);
-    headers.insert("x-history-id", HeaderValue::from_str(&id.to_string())?);
+    headers.insert(
+        "x-history-id",
+        HeaderValue::from_str(&UrlId(id).to_string())?,
+    );
 
     Ok((StatusCode::NO_CONTENT, headers))
 }

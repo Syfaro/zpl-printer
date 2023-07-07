@@ -6,7 +6,8 @@ use askama_axum::IntoResponse;
 use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
+    http::{request::Parts, HeaderValue, StatusCode},
+    response::{Redirect, Response},
 };
 use base64::Engine;
 use lru::LruCache;
@@ -70,6 +71,26 @@ where
             })
         } else {
             Ok(Self::Normal)
+        }
+    }
+}
+
+fn hx_load(request_type: &RequestType, reload: bool, fallback: &str) -> Result<Response, AppError> {
+    match request_type {
+        RequestType::Normal => Ok(Redirect::to(fallback).into_response()),
+        RequestType::Htmx { current_url, .. } => {
+            let mut resp = StatusCode::NO_CONTENT.into_response();
+
+            let location = if reload {
+                current_url.as_deref().unwrap_or(fallback)
+            } else {
+                fallback
+            };
+
+            resp.headers_mut()
+                .insert("hx-location", HeaderValue::from_str(location)?);
+
+            Ok(resp)
         }
     }
 }

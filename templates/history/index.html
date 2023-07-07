@@ -1,0 +1,118 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<main class="container">
+  <section>
+    <h1>History</h1>
+
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Printer</th>
+          <th scope="col">Label</th>
+          <th scope="col">Printed At</th>
+          <th scope="col"><span aria-label="Actions"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for (entry, variables, printer, label) in history %}
+        <tr>
+          <th scope="row">
+            {% match printer %}
+            {% when Some with (printer) %}
+            <a href="/printers/{{ printer.id.as_url() }}">{{ printer.name }}</a>
+            {% else %}
+            Unknown Printer
+            {% endmatch %}
+          </th>
+          <td>
+            {% match label %}
+            {% when Some with (label) %}
+            <a href="/playground/{{ label.id.as_url() }}">{{ label.name }}</a>
+            {% else %}
+            Unknown Label
+            {% endmatch %}
+          </td>
+          <td>
+            <span class="local-time" data-timestamp="{{ entry.printed_at.timestamp() }}">{{ entry.printed_at }}</span>
+          </td>
+          <td>
+            <div class="text-end">
+              <button data-action="modal" data-target="#details_{{ entry.id.as_url() }}">Details</button>
+            </div>
+
+            <dialog id="details_{{ entry.id.as_url() }}">
+              <article>
+                <header>
+                  <a href="#" aria-label="Close" class="close"></a>
+
+                  <p>
+                    <strong>Print Details</strong>
+                  </p>
+                </header>
+
+                <p>
+                  <label>ZPL</label>
+                  <pre><code>{{ entry.zpl }}</code></pre>
+                </p>
+
+                <p>
+                  <label>Variables</label>
+                  <pre><code>{{ variables }}</code></pre>
+                </p>
+              </article>
+            </dialog>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="text-end">
+      {% match prev_page %}
+      {% when Some with (prev_page) %}
+      <a role="button" href="/history?after={{ prev_page.as_url() }}">Previous</a>
+      {% else %}
+      <button disabled>Previous</button>
+      {% endmatch %}
+
+      {% match next_page %}
+      {% when Some with (next_page) %}
+      <a role="button" href="/history?before={{ next_page.as_url() }}">Next page</a>
+      {% else %}
+      <button disabled>Next page</button>
+      {% endmatch %}
+    </div>
+  </section>
+</main>
+
+<script>
+  const dateTimeFormat = new Intl.DateTimeFormat("default", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+  [...document.querySelectorAll(".local-time")].forEach((elem) => {
+    const timestamp = elem.dataset.timestamp;
+    const date = new Date(timestamp * 1e3);
+
+    elem.replaceChildren(document.createTextNode(dateTimeFormat.format(date)));
+  });
+
+  [...document.querySelectorAll("[data-action='modal']")].forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      document.querySelector(btn.dataset.target)?.showModal();
+      document.documentElement.classList.add("modal-is-open");
+    });
+  });
+
+  [...document.querySelectorAll("dialog .close")].forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.target.closest("dialog")?.close();
+      document.documentElement.classList.remove("modal-is-open");
+    });
+  });
+</script>
+{% endblock %}

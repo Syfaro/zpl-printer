@@ -8,25 +8,30 @@ use std::{
 use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
-    extract::{Path, State},
-    http::{HeaderValue, Method, StatusCode},
+    extract::{Path, Query, State},
+    http::{Method, StatusCode},
     response::{Redirect, Response},
     routing::{delete, get, post, put},
     Form, Router,
 };
 use base64::Engine;
+use itertools::{izip, Itertools};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use sea_orm::{ActiveModelTrait, ActiveValue::NotSet, EntityTrait, QueryOrder, Set};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::NotSet, CursorTrait, DbBackend, EntityTrait, FromQueryResult,
+    LoaderTrait, QueryOrder, Set, Statement,
+};
 use serde::Deserialize;
 use serde_with::{serde_as, NoneAsEmptyString};
+use tokio::try_join;
 use uuid::Uuid;
 
 use crate::{
     entities::*,
     render_zpl, send_print_job,
     template::{render_label, VariableExtractor},
-    web::{AppState, AsUrl, RequestType, UrlId},
+    web::{hx_load, AppState, AsUrl, RequestType, UrlId},
     AppError,
 };
 
@@ -42,6 +47,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/playground", get(playground).post(playground))
         .route("/playground/:id", get(playground))
         .route("/playground/print/:id", post(playground_print))
+        .route("/history", get(history))
 }
 
 #[derive(Template, Default)]
@@ -170,26 +176,6 @@ async fn label_sizes(
     tracing::info!(id = %label_size.last_insert_id, "inserted new label size");
 
     Ok(Redirect::to("/labels").into_response())
-}
-
-fn hx_load(request_type: &RequestType, reload: bool, fallback: &str) -> Result<Response, AppError> {
-    match request_type {
-        RequestType::Normal => Ok(Redirect::to(fallback).into_response()),
-        RequestType::Htmx { current_url, .. } => {
-            let mut resp = StatusCode::NO_CONTENT.into_response();
-
-            let location = if reload {
-                current_url.as_deref().unwrap_or(fallback)
-            } else {
-                fallback
-            };
-
-            resp.headers_mut()
-                .insert("hx-location", HeaderValue::from_str(location)?);
-
-            Ok(resp)
-        }
-    }
 }
 
 async fn label_size(
@@ -552,4 +538,89 @@ async fn playground_print(
     .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Template)]
+#[template(path = "history/index.html")]
+struct HistoryTemplate<'a> {
+    history: Vec<(
+        &'a history::Model,
+        String,
+        Option<printer::Model>,
+        Option<label::Model>,
+    )>,
+
+    next_page: Option<UrlId>,
+    prev_page: Option<UrlId>,
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    before: Option<UrlId>,
+    after: Option<UrlId>,
+}
+
+#[derive(Debug, Default, FromQueryResult)]
+struct NextItems {
+    next_page: Option<bool>,
+    prev_page: Option<bool>,
+}
+
+fn page_id(page: Option<bool>, id: Option<Uuid>) -> Option<UrlId> {
+    if page.unwrap_or_default() {
+        id.map(Into::into)
+    } else {
+        None
+    }
+}
+
+async fn history(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Response, AppError> {
+    const PAGE_COUNT: u64 = 25;
+
+    let mut history = history::Entity::find().cursor_by(history::Column::Id);
+
+    if let Some(before) = query.before {
+        history.before(before.0).last(PAGE_COUNT);
+    } else if let Some(after) = query.after {
+        history.after(after.0).first(PAGE_COUNT);
+    } else {
+        history.last(PAGE_COUNT);
+    }
+
+    let mut entries = history.all(&state.db).await?;
+    entries.reverse();
+
+    let first_id = entries.first().map(|entry| entry.id);
+    let last_id = entries.last().map(|entry| entry.id);
+
+    let next_items: NextItems =
+        NextItems::find_by_statement(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT exists(SELECT 1 one FROM history WHERE id > $1 LIMIT 1) prev_page, exists(SELECT 1 one FROM history WHERE id < $2 LIMIT 1) next_page"#,
+            [first_id.into(), last_id.into()],
+        ))
+        .one(&state.db)
+        .await?
+        .unwrap_or_default();
+
+    let variables = entries
+        .iter()
+        .map(|entry| serde_json::to_string_pretty(&entry.variables).unwrap_or_default());
+
+    let (printers, labels): (Vec<Option<printer::Model>>, Vec<Option<label::Model>>) = try_join!(
+        entries.load_one(printer::Entity, &state.db),
+        entries.load_one(label::Entity, &state.db)
+    )?;
+
+    let history = izip!(&entries, variables, printers, labels).collect_vec();
+
+    Ok(HistoryTemplate {
+        history,
+        prev_page: page_id(next_items.prev_page, first_id),
+        next_page: page_id(next_items.next_page, last_id),
+    }
+    .into_response())
 }

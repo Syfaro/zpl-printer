@@ -1,8 +1,8 @@
 [package]
 authors = ["Syfaro <syfaro@huefox.com>"]
 name = "zpl-printer"
-version = "0.2.0"
-edition = "2021"
+version = "0.2.1"
+edition = "2024"
 publish = false
 
 [package.metadata.release]

@@ -8,7 +8,7 @@ use sea_orm::{ActiveValue::NotSet, Database, DatabaseConnection, EntityTrait, Se
 use sha2::{Digest, Sha256};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::Mutex};
 use tower_http::trace::{DefaultOnRequest, DefaultOnResponse};
-use tracing::{instrument, Level};
+use tracing::{Level, instrument};
 
 use entities::{label, label_size, printer};
 use migration::{Migrator, MigratorTrait};
@@ -23,7 +23,7 @@ mod web;
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "info,sqlx=warn,tower_http::trace=debug");
+        unsafe { std::env::set_var("RUST_LOG", "info,sqlx=warn,tower_http::trace=debug") }
     }
 
     let config = Config::parse();
@@ -103,7 +103,7 @@ async fn render_zpl(
     hasher.update(dpmm.to_ne_bytes());
     hasher.update(label_size.id.as_bytes());
     hasher.update(zpl.as_bytes());
-    let key: [u8; 32] = hasher.finalize().try_into().unwrap();
+    let key: [u8; 32] = hasher.finalize().into();
     tracing::Span::current().record("key", hex::encode(key));
 
     {

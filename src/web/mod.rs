@@ -6,7 +6,7 @@ use askama_axum::IntoResponse;
 use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode, request::Parts},
     response::{Redirect, Response},
 };
 use base64::Engine;

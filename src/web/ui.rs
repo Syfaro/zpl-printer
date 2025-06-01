@@ -8,14 +8,14 @@ use std::{
 use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
+    Form, Router,
     extract::{Path, Query, State},
     http::{Method, StatusCode},
     response::{Redirect, Response},
     routing::{delete, get, post, put},
-    Form, Router,
 };
 use base64::Engine;
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use sea_orm::{
@@ -23,17 +23,17 @@ use sea_orm::{
     LoaderTrait, QueryOrder, Set, Statement,
 };
 use serde::Deserialize;
-use serde_with::{serde_as, NoneAsEmptyString};
+use serde_with::{NoneAsEmptyString, serde_as};
 use tap::TapFallible;
 use tokio::try_join;
 use uuid::Uuid;
 
 use crate::{
+    AppError,
     entities::*,
     render_zpl, send_print_job,
-    template::{render_label, VariableExtractor},
-    web::{hx_load, AppState, AsUrl, RequestType, UrlId},
-    AppError,
+    template::{VariableExtractor, render_label},
+    web::{AppState, AsUrl, RequestType, UrlId, hx_load},
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -445,7 +445,7 @@ async fn playground(
                 printers,
                 label,
             }
-            .into_response())
+            .into_response());
         }
     };
 

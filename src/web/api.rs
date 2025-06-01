@@ -2,20 +2,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::State,
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     routing::post,
-    Json, Router,
 };
 use sea_orm::EntityTrait;
 use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 
 use crate::{
+    AppError,
     entities::*,
     send_print_job,
     web::{AppState, UrlId},
-    AppError,
 };
 
 pub fn routes() -> Router<Arc<AppState>> {

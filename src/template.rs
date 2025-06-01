@@ -1,8 +1,8 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use tera::{
+    Context, Tera, Value,
     ast::{Expr, ExprVal, FunctionCall, In, LogicExpr, MacroCall, MathExpr, Node},
-    Context, Tera,
 };
 
 pub fn get_tera() -> Tera {
@@ -11,7 +11,24 @@ pub fn get_tera() -> Tera {
     tera.autoescape_on(vec![".zpl"]);
     tera.set_escape_fn(escape_fn);
 
+    tera.register_filter("hex", hex_filter);
+
     tera
+}
+
+fn hex_filter(value: &Value, args: &HashMap<String, Value>) -> tera::Result<Value> {
+    match value {
+        tera::Value::String(val) => {
+            let new_value = if matches!(args.get("upper"), Some(Value::Bool(upper)) if *upper) {
+                hex::encode_upper(val)
+            } else {
+                hex::encode(val)
+            };
+
+            Ok(Value::String(new_value))
+        }
+        _ => Err(tera::Error::msg("can only encode strings to hex")),
+    }
 }
 
 pub fn render_label(content: &str, context: &Context) -> tera::Result<String> {

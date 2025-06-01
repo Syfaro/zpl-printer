@@ -3,8 +3,8 @@
 A web tool for easily templating and printing ZPL over HTTP. Heavily inspired by
 [zpl-rest](https://github.com/mrothenbuecher/zpl-rest/tree/master).
 
-It utilizes the [Tera](https://tera.netlify.app/docs/#templates) template engine
-to construct ZPL.
+It utilizes the [Tera](https://keats.github.io/tera/docs/#templates) template
+engine to construct ZPL.
 
 ![](docs/main-ui.png)
 

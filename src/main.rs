@@ -19,6 +19,7 @@ use crate::entities::history;
 mod entities;
 mod template;
 mod web;
+mod zpl;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {

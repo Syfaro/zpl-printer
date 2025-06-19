@@ -1,9 +1,12 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use image::imageops::FilterType::Lanczos3;
 use tera::{
     Context, Tera, Value,
     ast::{Expr, ExprVal, FunctionCall, In, LogicExpr, MacroCall, MathExpr, Node},
 };
+
+use crate::zpl;
 
 pub fn get_tera() -> Tera {
     let mut tera = Tera::default();
@@ -12,22 +15,88 @@ pub fn get_tera() -> Tera {
     tera.set_escape_fn(escape_fn);
 
     tera.register_filter("hex", hex_filter);
+    tera.register_filter("tohex", hex_filter);
+
+    tera.register_filter("image", ImageFilter);
 
     tera
 }
 
-fn hex_filter(value: &Value, args: &HashMap<String, Value>) -> tera::Result<Value> {
-    match value {
-        tera::Value::String(val) => {
-            let new_value = if matches!(args.get("upper"), Some(Value::Bool(upper)) if *upper) {
-                hex::encode_upper(val)
-            } else {
-                hex::encode(val)
-            };
+fn arr_as_byte_vec(arr: &[tera::Value]) -> Result<Vec<u8>, &'static str> {
+    arr.iter()
+        .map(|val| match val {
+            tera::Value::Number(num) => num
+                .as_u64()
+                .and_then(|num| u8::try_from(num).ok())
+                .ok_or("non-byte number value in array"),
+            _ => Err("non-number type in array"),
+        })
+        .collect()
+}
 
-            Ok(Value::String(new_value))
-        }
-        _ => Err(tera::Error::msg("can only encode strings to hex")),
+fn hex_filter(value: &Value, args: &HashMap<String, Value>) -> tera::Result<Value> {
+    let upper = matches!(args.get("upper"), Some(Value::Bool(upper)) if *upper);
+
+    match value {
+        tera::Value::String(val) => Ok(Value::String(if upper {
+            hex::encode_upper(val)
+        } else {
+            hex::encode(val)
+        })),
+        tera::Value::Array(arr) => match arr_as_byte_vec(arr) {
+            Ok(bytes) => Ok(Value::String(if upper {
+                hex::encode_upper(bytes)
+            } else {
+                hex::encode(bytes)
+            })),
+            Err(msg) => Err(tera::Error::msg(format!("could not encode to hex: {msg}"))),
+        },
+        _ => Err(tera::Error::msg(
+            "can only encode strings or byte arrays to hex",
+        )),
+    }
+}
+
+struct ImageFilter;
+
+impl tera::Filter for ImageFilter {
+    fn filter(&self, value: &Value, args: &HashMap<String, Value>) -> tera::Result<Value> {
+        let bytes = match value {
+            tera::Value::String(val) => hex::decode(val)
+                .map_err(|err| tera::Error::msg(format!("could not decode hex: {err}")))?,
+            tera::Value::Array(arr) => match arr_as_byte_vec(arr) {
+                Ok(bytes) => bytes,
+                Err(msg) => {
+                    return Err(tera::Error::msg(format!(
+                        "could not decode value as bytes: {msg}"
+                    )));
+                }
+            },
+            _ => return Err(tera::Error::msg("cannot convert value to image")),
+        };
+
+        let im = image::load_from_memory(&bytes)
+            .map_err(|err| tera::Error::msg(format!("data was not valid image: {err}")))?;
+
+        let dithering: Option<zpl::DitheringType> = args
+            .get("dithering")
+            .and_then(|val| tera::from_value(val.clone()).ok());
+
+        let height = args.get("height").and_then(|val| val.as_u64());
+        let width = args.get("width").and_then(|val| val.as_u64());
+
+        let im = match (height, width) {
+            (Some(height), Some(width)) => im.resize_exact(width as u32, height as u32, Lanczos3),
+            (Some(height), _) => im.resize(im.width(), height as u32, Lanczos3),
+            (_, Some(width)) => im.resize(width as u32, im.height(), Lanczos3),
+            _ => im,
+        };
+
+        Ok(tera::Value::String(zpl::image_to_gf(&im, dithering)))
+    }
+
+    fn is_safe(&self) -> bool {
+        true
     }
 }
 
@@ -79,6 +148,8 @@ impl VariableExtractor {
                         tracing::trace!("variables did not contain key, adding to exclusions");
                         self.exclusions.insert(set.key);
                     }
+
+                    self.expand_expr(set.value);
                 }
                 Node::FilterSection(_, block, _) => self.expand_node(block.body),
                 Node::Forloop(_, block, _) => self.expand_node(block.body),

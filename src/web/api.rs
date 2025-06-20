@@ -5,6 +5,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, HeaderValue, Method, StatusCode},
+    response::{IntoResponse, Response},
     routing::post,
 };
 use sea_orm::EntityTrait;
@@ -33,13 +34,13 @@ struct PrintJson {
     printer_id: UrlId,
     label_id: UrlId,
     #[serde(rename = "data")]
-    fields: HashMap<String, String>,
+    fields: Option<HashMap<String, String>>,
 }
 
 async fn print(
     State(state): State<Arc<AppState>>,
     Json(data): Json<PrintJson>,
-) -> Result<(StatusCode, HeaderMap), AppError> {
+) -> Result<(StatusCode, Response), AppError> {
     let printer = printer::Entity::find_by_id(data.printer_id)
         .one(&state.db)
         .await?
@@ -50,7 +51,15 @@ async fn print(
         .await?
         .ok_or_else(|| eyre::eyre!("unknown label"))?;
 
-    let id = send_print_job(&state.db, printer, label, data.fields, state.skip, true).await?;
+    let (id, verifications) = send_print_job(
+        &state.db,
+        printer,
+        label,
+        data.fields.unwrap_or_default(),
+        state.skip,
+        true,
+    )
+    .await?;
 
     let mut headers = HeaderMap::with_capacity(1);
     headers.insert(
@@ -58,5 +67,18 @@ async fn print(
         HeaderValue::from_str(&UrlId(id).to_string())?,
     );
 
-    Ok((StatusCode::NO_CONTENT, headers))
+    if let Some(verifications) = verifications {
+        Ok((
+            StatusCode::OK,
+            (
+                headers,
+                Json(serde_json::json!({
+                    "verifications": verifications,
+                })),
+            )
+                .into_response(),
+        ))
+    } else {
+        Ok((StatusCode::NO_CONTENT, headers.into_response()))
+    }
 }

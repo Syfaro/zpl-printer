@@ -14,6 +14,9 @@ pub struct Model {
     #[sea_orm(column_type = "JsonBinary")]
     pub variables: Json,
     pub printed_at: DateTimeWithTimeZone,
+    pub count: i32,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub verification: Option<Json>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

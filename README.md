@@ -19,9 +19,16 @@ preview service provided by [Labelary](http://labelary.com).
 
 Labels can be saved and then printed via API.
 
-### API
+### Host Verification (`^HV`)
 
-#### `POST /api/v1/print`
+When a label template contains the `^HV` command, this tool will automatically
+try to parse the output to extract the values. When using it, the number of
+bytes must be set exactly correct otherwise the extraction will fail.
+Additionally, all fields must be set to apply to each label (the "L" flag).
+
+## API
+
+### `POST /api/v1/print`
 
 Prints a label. It requires a JSON-encoded body with the following contents:
 
@@ -32,3 +39,24 @@ Prints a label. It requires a JSON-encoded body with the following contents:
     "data": {}        // Arbitrary key-value data passed to label's template
 }
 ```
+
+If the label template does not contain any `^HV` commands, no response body will
+be sent and the status code will be 204.
+
+If the template does contains an `^HV` command, and it was possible to parse the
+values, they will be returned and the response will have a status code of 200:
+
+```jsonc
+{
+    "verifications": [
+        [ // Each printed label will have an entry
+            { // And each entry is key/value pairs of the field ID and value
+                "1": "value"
+            }
+        ]
+    ]
+}
+```
+
+Responses also set a `x-history-id` header with the ID of the saved history
+object.

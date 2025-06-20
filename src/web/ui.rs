@@ -541,16 +541,18 @@ async fn playground_print(
     Ok(StatusCode::NO_CONTENT)
 }
 
+type HistoryValues<'a> = Vec<(
+    &'a history::Model,
+    String,
+    Option<Vec<BTreeMap<u16, String>>>,
+    Option<printer::Model>,
+    Option<label::Model>,
+)>;
+
 #[derive(Template)]
 #[template(path = "history/index.html")]
 struct HistoryTemplate<'a> {
-    history: Vec<(
-        &'a history::Model,
-        String,
-        Option<printer::Model>,
-        Option<label::Model>,
-    )>,
-
+    history: HistoryValues<'a>,
     next_page: Option<UrlId>,
     prev_page: Option<UrlId>,
 }
@@ -611,12 +613,22 @@ async fn history(
         .iter()
         .map(|entry| serde_json::to_string_pretty(&entry.variables).unwrap_or_default());
 
+    let verifications = entries.iter().map(|entry| {
+        entry
+            .verification
+            .as_ref()
+            .map(|verification| {
+                serde_json::from_value::<Vec<BTreeMap<u16, String>>>(verification.clone()).ok()
+            })
+            .unwrap_or_default()
+    });
+
     let (printers, labels): (Vec<Option<printer::Model>>, Vec<Option<label::Model>>) = try_join!(
         entries.load_one(printer::Entity, &state.db),
         entries.load_one(label::Entity, &state.db)
     )?;
 
-    let history = izip!(&entries, variables, printers, labels).collect_vec();
+    let history = izip!(&entries, variables, verifications, printers, labels).collect_vec();
 
     Ok(HistoryTemplate {
         history,

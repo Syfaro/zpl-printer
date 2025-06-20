@@ -1,5 +1,15 @@
+use std::collections::HashMap;
+
 use image::{DynamicImage, ImageBuffer, Luma, LumaA, buffer::ConvertBuffer, imageops};
 use itertools::Itertools;
+use nom::{
+    Parser,
+    branch::alt,
+    bytes::complete::{is_not, tag_no_case, take},
+    character::complete::{char, multispace0},
+    combinator::opt,
+    multi::many0,
+};
 use tracing::{debug, instrument};
 
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
@@ -187,4 +197,193 @@ fn zpl_repeat_code(c: char, mut count: usize) -> String {
     }
 
     format!("{s}{c}")
+}
+
+pub struct ZplParser {
+    caret: char,
+    tilde: char,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZplCommand<'a> {
+    pub start: char,
+    pub name: &'a str,
+    pub args: &'a str,
+}
+
+#[derive(Clone, Debug)]
+pub struct ZplHostVerification<'a> {
+    pub length: usize,
+    pub prefix: Option<&'a str>,
+    pub suffix: Option<&'a str>,
+    pub applies_to: Option<char>,
+}
+
+impl<'a> ZplHostVerification<'a> {
+    pub fn from_commands(commands: &[ZplCommand<'a>]) -> HashMap<u16, ZplHostVerification<'a>> {
+        commands
+            .iter()
+            .filter(|command| command.start == '^' && command.name == "HV")
+            .filter_map(|hv| {
+                let mut args = hv.args.splitn(5, ',');
+                let field_no = args.next().unwrap_or("0").parse().ok()?;
+                let length = args.next().unwrap_or("64").parse().ok()?;
+                let prefix = args.next();
+                let suffix = args.next();
+                let applies_to = args.next().and_then(|applies_to| applies_to.chars().next());
+
+                Some((
+                    field_no,
+                    ZplHostVerification {
+                        length,
+                        prefix,
+                        suffix,
+                        applies_to,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
+impl Default for ZplParser {
+    fn default() -> Self {
+        Self {
+            caret: '^',
+            tilde: '~',
+        }
+    }
+}
+
+impl ZplParser {
+    pub fn parse<'a>(input: &'a str) -> eyre::Result<Vec<ZplCommand<'a>>> {
+        let mut parser = Self::default();
+
+        many0(|s| parser.parse_command(s))
+            .parse(input)
+            .map(|(_, commands)| commands)
+            .map_err(|err| eyre::eyre!("could not parse zpl: {err}"))
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn parse_command<'a>(&mut self, input: &'a str) -> nom::IResult<&'a str, ZplCommand<'a>> {
+        let (input, _) = multispace0(input)?;
+        let (input, command) = opt(alt((
+            (char(self.caret), tag_no_case([b'A', b'@'].as_slice())),
+            (char(self.caret), tag_no_case([b'A'].as_slice())),
+        )))
+        .parse(input)?;
+
+        let (input, start, name) = if let Some((start, name)) = command {
+            (input, start, name)
+        } else {
+            let (input, (caret, name)) =
+                (alt((char(self.caret), char(self.tilde))), take(2usize)).parse(input)?;
+            (input, caret, name)
+        };
+        tracing::trace!(%start, name, "identified command");
+        let normalized_command_start = if start == self.caret { '^' } else { '~' };
+
+        let (input, args) = if start == self.caret && name.eq_ignore_ascii_case("CC") {
+            let (input, arg) = take(1usize)(input)?;
+            tracing::trace!("changing caret symbol to {arg}");
+            self.caret = arg.chars().next().unwrap();
+            (input, arg)
+        } else if start == self.caret && name.eq_ignore_ascii_case("CT") {
+            let (input, arg) = take(1usize)(input)?;
+            tracing::trace!("changing tilde symbol to {arg}");
+            self.tilde = arg.chars().next().unwrap();
+            (input, arg)
+        } else {
+            let (input, args) = opt(is_not([self.caret, self.tilde].as_slice())).parse(input)?;
+            let args = args.unwrap_or_default();
+            tracing::trace!(args, "got command arguments");
+            (input, args)
+        };
+
+        Ok((
+            input,
+            ZplCommand {
+                start: normalized_command_start,
+                name,
+                args: args.trim(),
+            },
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::zpl::{ZplCommand, ZplParser};
+
+    #[test]
+    fn test_parse_basic_commands() {
+        let input = "  ^XA\n\n^FDtest^XZ";
+        let commands: Vec<_> = ZplParser::parse(input).unwrap();
+
+        assert_eq!(
+            commands,
+            vec![
+                ZplCommand {
+                    start: '^',
+                    name: "XA",
+                    args: ""
+                },
+                ZplCommand {
+                    start: '^',
+                    name: "FD",
+                    args: "test",
+                },
+                ZplCommand {
+                    start: '^',
+                    name: "XZ",
+                    args: ""
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_a_command() {
+        let input = "^A@test ^AU";
+        let commands = ZplParser::parse(input).unwrap();
+
+        assert_eq!(
+            commands,
+            vec![
+                ZplCommand {
+                    start: '^',
+                    name: "A@",
+                    args: "test"
+                },
+                ZplCommand {
+                    start: '^',
+                    name: "A",
+                    args: "U",
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_changes() {
+        let input = "^CC[[FDtest^FDtest";
+        let commands = ZplParser::parse(input).unwrap();
+
+        assert_eq!(
+            commands,
+            vec![
+                ZplCommand {
+                    start: '^',
+                    name: "CC",
+                    args: "["
+                },
+                ZplCommand {
+                    start: '^',
+                    name: "FD",
+                    args: "test^FDtest"
+                },
+            ]
+        );
+    }
 }

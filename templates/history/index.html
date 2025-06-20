@@ -11,11 +11,12 @@
           <th scope="col">Printer</th>
           <th scope="col">Label</th>
           <th scope="col">Printed At</th>
+          <th scope="col">Count</th>
           <th scope="col"><span aria-label="Actions"></span></th>
         </tr>
       </thead>
       <tbody>
-        {% for (entry, variables, printer, label) in history %}
+        {% for (entry, variables, verifications, printer, label) in history %}
         <tr>
           <th scope="row">
             {% match printer %}
@@ -35,6 +36,9 @@
           </td>
           <td>
             <span class="local-time" data-timestamp="{{ entry.printed_at.timestamp() }}">{{ entry.printed_at }}</span>
+          </td>
+          <td>
+            {{ entry.count }}
           </td>
           <td>
             <div class="text-end">
@@ -60,6 +64,35 @@
                   <label>Variables</label>
                   <pre><code>{{ variables }}</code></pre>
                 </p>
+
+                {% match verifications %}
+                {% when Some with (verifications) %}
+                {% if !verifications.is_empty() %}
+                <label>Host Verifications</label>
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Label</th>
+                      <th scope="col">Field ID</th>
+                      <th scope="col">Value</th>
+                    </tr>
+                  </thead>
+                  {% for verification in verifications %}
+                  {% set label_index = loop.index %}
+                  <tbody>
+                    {% for (id, field) in verification %}
+                    <tr>
+                      <th>{{ label_index }}</th>
+                      <th>{{ id }}</th>
+                      <td>{{ field }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                  {% endfor %}
+                </table>
+                {% endif %}
+                {% else %}
+                {% endmatch %}
               </article>
             </dialog>
           </td>

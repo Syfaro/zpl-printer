@@ -26,6 +26,7 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
+                    .name("label_width_height_unique_idx")
                     .unique()
                     .table(LabelSize::Table)
                     .col(LabelSize::Width)

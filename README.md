@@ -10,9 +10,9 @@ engine to construct ZPL.
 
 ## Usage
 
-Build with cargo. It depends on PostgreSQL to store data, set the `DATABASE_URL`
-environment variable before running. The web UI available on port 3000 allows
-configuring printers, label sizes, and labels.
+Build with cargo. It depends on PostgreSQL or SQLite to store data, set the
+`DATABASE_URL` environment variable before running. The web UI available on port
+3000 allows configuring printers, label sizes, and labels.
 
 The playground allows quick iteration of label design thanks to the label
 preview service provided by [Labelary](http://labelary.com).

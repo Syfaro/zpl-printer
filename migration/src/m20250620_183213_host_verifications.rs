@@ -16,10 +16,20 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(1),
                     )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(History::Table)
                     .add_column_if_not_exists(ColumnDef::new(History::Verification).json_binary())
                     .to_owned(),
             )
-            .await
+            .await?;
+
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {

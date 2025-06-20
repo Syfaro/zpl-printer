@@ -29,7 +29,7 @@
           </select>
         </label>
 
-        <div class="text-center">
+        <div class="text-center grid">
           {% match label %}
           {% when Some with (label) %}
           <input type="hidden" name="_id" value="{{ label.id.as_url() }}">

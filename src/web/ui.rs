@@ -15,6 +15,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use base64::Engine;
+use ipp::prelude::{AsyncIppClient, IppOperationBuilder};
 use itertools::{Itertools, izip};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -22,7 +23,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, CursorTrait, DbBackend, EntityTrait, FromQueryResult,
     LoaderTrait, QueryOrder, Set, Statement,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::{NoneAsEmptyString, serde_as};
 use tap::TapFallible;
 use tokio::try_join;
@@ -43,7 +44,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/labels/:id", put(label).delete(label))
         .route("/label_sizes", post(label_sizes))
         .route("/label_sizes/:id", delete(label_size))
-        .route("/printers", post(printers))
+        .route("/printers", get(printers).post(printers))
         .route("/printers/:id", get(printer).put(printer))
         .route("/playground", get(playground).post(playground))
         .route("/playground/:id", get(playground))
@@ -195,58 +196,156 @@ async fn label_size(
     hx_load(&request_type, true, "/labels")
 }
 
+#[derive(Template)]
+#[template(path = "printers/form.html")]
+struct PrinterFormTemplate {
+    cups_devices: Option<Vec<(String, String)>>,
+    current_size: Option<label_size::Model>,
+    label_sizes: Vec<label_size::Model>,
+
+    name: String,
+    dpmm: i16,
+    connection: Option<PrinterConnection>,
+}
+
+impl PrinterFormTemplate {
+    fn is_current_size(&self, size: &label_size::Model) -> bool {
+        self.current_size.as_ref() == Some(size)
+    }
+
+    fn address(&self) -> String {
+        match self.connection {
+            Some(PrinterConnection::Network { address }) => address.to_string(),
+            _ => "".to_string(),
+        }
+    }
+
+    fn cups_id_selected(&self, id: &str) -> bool {
+        matches!(self.connection.as_ref(), Some(PrinterConnection::Cups { uri }) if uri == id)
+    }
+
+    pub fn is_network(&self) -> bool {
+        matches!(self.connection, Some(PrinterConnection::Network { .. }))
+    }
+
+    pub fn is_cups(&self) -> bool {
+        matches!(self.connection, Some(PrinterConnection::Cups { .. }))
+    }
+}
+
+#[derive(Template)]
+#[template(path = "printers/add.html")]
+struct AddPrinterTemplate {
+    form: PrinterFormTemplate,
+}
+
 #[serde_as]
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct PrinterForm {
     name: String,
-    address: SocketAddr,
+    #[serde(flatten)]
+    connection: Option<PrinterConnection>,
     dpmm: i16,
     #[serde(default)]
     #[serde_as(as = "NoneAsEmptyString")]
     current_size: Option<UrlId>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "connection_type", rename_all = "snake_case")]
+pub enum PrinterConnection {
+    Network { address: SocketAddr },
+    Cups { uri: String },
+}
+
+async fn cups_devices(ipp: Option<&AsyncIppClient>) -> eyre::Result<Option<Vec<(String, String)>>> {
+    let devices = if let Some(ipp) = ipp.as_ref() {
+        let resp = ipp.send(IppOperationBuilder::cups().get_printers()).await?;
+
+        Some(
+            resp.attributes()
+                .groups_of(ipp::model::DelimiterTag::PrinterAttributes)
+                .map(|group| {
+                    let uri = group.attributes()["printer-uri-supported"]
+                        .value()
+                        .to_string();
+                    let name = group.attributes()["printer-name"].value().to_string();
+                    (uri, name)
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    Ok(devices)
+}
+
 async fn printers(
     State(state): State<Arc<AppState>>,
+    method: Method,
     request_type: RequestType,
-    Form(form): Form<PrinterForm>,
+    form: Option<Form<PrinterForm>>,
 ) -> Result<Response, AppError> {
-    let label_size_id = if let Some(current_size) = form.current_size {
-        Set(label_size::Entity::find_by_id(current_size)
-            .one(&state.db)
-            .await
-            .ok()
-            .flatten()
-            .map(|label_size| label_size.id))
-    } else {
-        NotSet
-    };
+    match method {
+        Method::GET => {
+            let label_sizes = label_size::Entity::find()
+                .order_by_asc(label_size::Column::Width)
+                .order_by_asc(label_size::Column::Height)
+                .all(&state.db)
+                .await?;
 
-    let printer = printer::ActiveModel {
-        id: Set(Uuid::now_v7()),
-        name: Set(form.name),
-        address: Set(form.address.to_string()),
-        dpmm: Set(form.dpmm),
-        label_size_id,
-    };
+            Ok(AddPrinterTemplate {
+                form: PrinterFormTemplate {
+                    cups_devices: cups_devices(state.ipp.as_ref()).await?,
+                    current_size: None,
+                    label_sizes,
 
-    printer.insert(&state.db).await?;
+                    name: "".to_string(),
+                    dpmm: 8,
+                    connection: None,
+                },
+            }
+            .into_response())
+        }
+        Method::POST => {
+            let Form(form) = form.ok_or_else(|| eyre::eyre!("missing form"))?;
+            let connection = form
+                .connection
+                .ok_or_else(|| eyre::eyre!("missing connection"))?;
 
-    hx_load(&request_type, true, "/labels")
+            let label_size_id = if let Some(current_size) = form.current_size {
+                Set(label_size::Entity::find_by_id(current_size)
+                    .one(&state.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|label_size| label_size.id))
+            } else {
+                NotSet
+            };
+
+            let printer = printer::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                name: Set(form.name),
+                dpmm: Set(form.dpmm),
+                label_size_id,
+                connection: Set(serde_json::to_value(connection)?),
+            };
+
+            printer.insert(&state.db).await?;
+
+            hx_load(&request_type, true, "/labels")
+        }
+        _ => Err(eyre::eyre!("unknown method").into()),
+    }
 }
 
 #[derive(Template)]
-#[template(path = "labels/printer.html")]
+#[template(path = "printers/show.html")]
 struct PrinterTemplate {
     printer: printer::Model,
-    current_size: Option<label_size::Model>,
-    label_sizes: Vec<label_size::Model>,
-}
-
-impl PrinterTemplate {
-    fn is_current_size(&self, size: &label_size::Model) -> bool {
-        self.current_size.as_ref() == Some(size)
-    }
+    form: PrinterFormTemplate,
 }
 
 async fn printer(
@@ -270,17 +369,27 @@ async fn printer(
 
     match method {
         Method::GET => Ok(PrinterTemplate {
+            form: PrinterFormTemplate {
+                cups_devices: cups_devices(state.ipp.as_ref()).await?,
+                current_size,
+                label_sizes,
+
+                connection: serde_json::from_value(printer.connection.clone())?,
+                name: printer.name.clone(),
+                dpmm: printer.dpmm,
+            },
             printer,
-            current_size,
-            label_sizes,
         }
         .into_response()),
         Method::PUT => {
             let Form(form) = form.ok_or_else(|| eyre::eyre!("missing form"))?;
+            let connection = form
+                .connection
+                .ok_or_else(|| eyre::eyre!("missing connection"))?;
 
             let mut printer: printer::ActiveModel = printer.into();
             printer.name = Set(form.name);
-            printer.address = Set(form.address.to_string());
+            printer.connection = Set(serde_json::to_value(connection)?);
             printer.dpmm = Set(form.dpmm);
             printer.label_size_id = if let Some(current_size) = form.current_size {
                 Set(Some(current_size.into()))
@@ -290,7 +399,7 @@ async fn printer(
 
             printer.update(&state.db).await?;
 
-            hx_load(&request_type, false, "/labels")
+            hx_load(&request_type, true, "/labels")
         }
         _ => Err(eyre::eyre!("unknown method").into()),
     }
@@ -521,6 +630,7 @@ async fn playground_print(
 
     send_print_job(
         &state.db,
+        state.ipp.as_ref(),
         printer,
         label::Model {
             id: label_id,

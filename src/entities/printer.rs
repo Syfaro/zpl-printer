@@ -9,10 +9,10 @@ pub struct Model {
     pub id: Uuid,
     #[sea_orm(column_type = "Text")]
     pub name: String,
-    #[sea_orm(column_type = "Text")]
-    pub address: String,
     pub dpmm: i16,
     pub label_size_id: Option<Uuid>,
+    #[sea_orm(column_type = "JsonBinary")]
+    pub connection: Json,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

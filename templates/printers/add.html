@@ -1,0 +1,15 @@
+{% import "macros.html" as macros %}
+
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="container">
+  <h1>Add Printer</h1>
+
+  <form hx-post="">
+    {{ form|safe }}
+
+    <input type="submit" value="Add">
+  </form>
+</section>
+{% endblock %}

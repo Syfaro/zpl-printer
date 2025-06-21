@@ -1,0 +1,79 @@
+{% import "macros.html" as macros %}
+
+<label>
+  Name
+  <input type="text" required name="name" value="{{ name }}">
+</label>
+
+{% match cups_devices %}
+{% when Some with (cups_devices) %}
+<fieldset>
+  <legend>Connection Type</legend>
+  <label>
+    <input type="radio" name="connection_type" value="network" {% if self.is_network() %}checked{% endif %}>
+    Network
+  </label>
+  <label>
+    <input type="radio" name="connection_type" value="cups" {% if self.is_cups() %}checked{% endif %}>
+    CUPS
+  </label>
+</fieldset>
+
+<fieldset data-connection-type="cups">
+  <label for="cups_device">CUPS Device</label>
+  <select id="cups_device" name="uri">
+    {% for (uri, name) in cups_devices %}
+    <option value="{{ uri }}" {% if self.cups_id_selected(uri) %}selected{% endif %}>{{ name }}</option>
+    {% endfor %}
+  </select>
+</fieldset>
+{% else %}
+<input type="hidden" name="connection_type" value="network">
+{% endmatch %}
+
+<label data-connection-type="network">
+  Address
+  <input type="text" name="address" value="{{ self.address() }}">
+</label>
+
+<label>
+  Density
+  {% set selected_dpmm = dpmm %}
+
+  <select name="dpmm" required>
+    {% include "zpl/dpmm.html" %}
+  </select>
+</label>
+
+<label>
+  Current Label Size
+  <select name="current_size">
+    <option value="">Unknown</option>
+    {% for size in label_sizes %}
+    <option {% if self.is_current_size(size) %}selected{% endif %} value="{{ size.id.as_url() }}">
+      {{ size.width }}&times;{{ size.height}} in
+    </option>
+    {% endfor %}
+  </select>
+</label>
+
+<script>
+  function showCorrectChoices(selected) {
+    [...document.querySelectorAll("[data-connection-type]")].forEach((input) => {
+      input.style.display = "none";
+    });
+
+    if (selected) {
+      document.querySelector(`[data-connection-type=${selected}]`).style.display = "";
+    }
+  }
+
+  showCorrectChoices(document.querySelector("input[name=connection_type]:checked")?.value);
+
+  [...document.querySelectorAll("input[name=connection_type]")].forEach((radio) => {
+    radio.addEventListener("change", (ev) => {
+      const value = ev.target.value;
+      showCorrectChoices(value);
+    });
+  });
+</script>

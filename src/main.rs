@@ -1,8 +1,11 @@
-use std::{collections::HashMap, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, io::Cursor, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration,
+};
 
 use axum::{Router, Server};
 use axum_prometheus::PrometheusMetricLayer;
 use clap::Parser;
+use ipp::prelude::{AsyncIppClient, IppOperationBuilder, IppPayload, Uri};
 use lru::LruCache;
 use sea_orm::{
     ActiveValue::NotSet, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
@@ -40,11 +43,19 @@ async fn main() -> eyre::Result<()> {
     let db = Database::connect(&config.database_url).await?;
     Migrator::up(&db, None).await?;
 
+    let ipp_client = if let Some(cups_host) = config.cups_host {
+        tracing::info!("enabling cups");
+        Some(AsyncIppClient::builder(cups_host).build())
+    } else {
+        None
+    };
+
     let state = Arc::new(web::AppState {
         db,
         image_cache: Mutex::new(LruCache::new(config.cached_images)),
         client: Default::default(),
         skip: config.skip,
+        ipp: ipp_client,
     });
 
     let (prom_layer, metrics_handler) = PrometheusMetricLayer::pair();
@@ -80,6 +91,9 @@ struct Config {
     /// Address where http server is bound.
     #[clap(long, env, default_value = "0.0.0.0:3000")]
     address: SocketAddr,
+    /// Host for CUPS server, if one should be used.
+    #[clap(long, env)]
+    cups_host: Option<Uri>,
     /// Maximum number of cached images.
     #[clap(long, env, default_value = "64")]
     cached_images: NonZeroUsize,
@@ -150,6 +164,7 @@ type LabelValidations = Vec<HashMap<u16, String>>;
 #[tracing::instrument(skip_all, fields(printer_id = %printer.id, label_id = %label.id, skip))]
 async fn send_print_job(
     db: &DatabaseConnection,
+    ipp: Option<&AsyncIppClient>,
     printer: printer::Model,
     label: label::Model,
     variables: HashMap<String, String>,
@@ -218,31 +233,49 @@ async fn send_print_job(
         tracing::warn!("skipping print");
         None
     } else {
-        let mut conn = TcpStream::connect(printer.address).await?;
-        conn.write_all(data.as_bytes()).await?;
+        match serde_json::from_value::<web::PrinterConnection>(printer.connection)? {
+            web::PrinterConnection::Network { address } => {
+                let mut conn = TcpStream::connect(address).await?;
+                conn.write_all(data.as_bytes()).await?;
 
-        let verifications = if !host_verifications.is_empty() && host_verification_all_labels {
-            match check_host_verifications(
-                &mut conn,
-                db,
-                history_id,
-                host_verifications,
-                print_quantity,
-            )
-            .await
-            {
-                Ok(verifications) => Some(verifications),
-                Err(err) => {
-                    tracing::error!("could not get verifications: {err}");
-                    None
-                }
+                let verifications =
+                    if !host_verifications.is_empty() && host_verification_all_labels {
+                        match check_host_verifications(
+                            &mut conn,
+                            db,
+                            history_id,
+                            host_verifications,
+                            print_quantity,
+                        )
+                        .await
+                        {
+                            Ok(verifications) => Some(verifications),
+                            Err(err) => {
+                                tracing::error!("could not get verifications: {err}");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                conn.shutdown().await?;
+                verifications
             }
-        } else {
-            None
-        };
+            web::PrinterConnection::Cups { uri } => {
+                let Some(ipp) = ipp else {
+                    eyre::bail!("cups printer but not configured to use cups");
+                };
 
-        conn.shutdown().await?;
-        verifications
+                let payload = IppPayload::new(Cursor::new(data.into_bytes()));
+                let op = IppOperationBuilder::print_job(uri.parse()?, payload).build();
+
+                let resp = ipp.send(op).await?;
+                tracing::info!(status_code = %resp.header().status_code(), "got print status code");
+
+                None
+            }
+        }
     };
 
     tracing::info!("finished print job");

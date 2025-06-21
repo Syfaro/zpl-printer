@@ -53,6 +53,7 @@ async fn print(
 
     let (id, verifications) = send_print_job(
         &state.db,
+        state.ipp.as_ref(),
         printer,
         label,
         data.fields.unwrap_or_default(),

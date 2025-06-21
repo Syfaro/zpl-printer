@@ -10,20 +10,23 @@ use axum::{
     response::{Redirect, Response},
 };
 use base64::Engine;
+use ipp::prelude::AsyncIppClient;
 use lru::LruCache;
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use tokio::sync::Mutex;
-pub use ui::routes as ui_routes;
 use uuid::Uuid;
 
 use crate::AppError;
+pub use ui::PrinterConnection;
+pub use ui::routes as ui_routes;
 
 pub struct AppState {
     pub db: DatabaseConnection,
     pub image_cache: Mutex<LruCache<[u8; 32], Vec<u8>>>,
     pub client: reqwest::Client,
     pub skip: bool,
+    pub ipp: Option<AsyncIppClient>,
 }
 
 #[derive(Debug, Default, PartialEq)]

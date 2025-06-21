@@ -84,7 +84,6 @@
           <tr>
             <th scope="col">Name</th>
             <th scope="col">ID</th>
-            <th scope="col">Address</th>
             <th scope="col">Density</th>
             <th scope="col">Label Size</th>
             <th><span aria-label="Actions"></span></th>
@@ -95,7 +94,6 @@
           <tr>
             <th scope="row">{{ printer.name }}</th>
             <td><code>{{ printer.id.as_url() }}</code></td>
-            <td><code>{{ printer.address }}</code></td>
             <td>{{ printer.dpmm }}&nbsp;dpmm</td>
             <td>
               {% match label_size %}
@@ -117,18 +115,8 @@
     </figure>
     {% endif %}
 
-    <form method="post" action="/printers">
-      <fieldset class="grid">
-        <input type="text" name="name" placeholder="Name" required>
-        <input type="text" name="address" placeholder="Address" required>
-        <select name="dpmm" required>
-          <option value="6">6 dpmm (152 dpi)</option>
-          <option value="8" selected>8 dpmm (203 dpi)</option>
-          <option value="12">12 dpmm (300 dpi)</option>
-          <option value="24">24 dpmm (600 dpi)</option>
-        </select>
-        <button type="submit">Add</button>
-      </fieldset>
+    <form action="/printers">
+      <button>Add</button>
     </form>
   </section>
 </main>

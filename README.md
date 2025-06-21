@@ -26,6 +26,8 @@ try to parse the output to extract the values. When using it, the number of
 bytes must be set exactly correct otherwise the extraction will fail.
 Additionally, all fields must be set to apply to each label (the "L" flag).
 
+This feature is not supported when printer is configured using CUPS.
+
 ## API
 
 ### `POST /api/v1/print`

@@ -7,30 +7,32 @@
 
     {% if labels.is_empty() %}
     {% else %}
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">Name</th>
-          <th scope="col">ID</th>
-          <th scope="col">Size</th>
-          <th><span aria-label="Actions"></span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for (label, label_size) in labels %}
-        <tr>
-          <th scope="row">{{ label.name }}</th>
-          <td><code>{{ label.id.as_url() }}</code></td>
-          <td>{{ label_size.width }}&times;{{ label_size.height }} in</td>
-          <td class="text-end">
-            <a href="/playground/{{ label.id.as_url() }}" class="contrast" role="button">Edit</a>
-            <button class="outline secondary" hx-delete="/labels/{{ label.id.as_url() }}"
-              hx-confirm="Are you sure you want to delete {{ label.name }}?">Delete</button>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="overflow-auto">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">ID</th>
+            <th scope="col">Size</th>
+            <th><span aria-label="Actions"></span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for (label, label_size) in labels %}
+          <tr>
+            <th scope="row">{{ label.name }}</th>
+            <td><code>{{ label.id.as_url() }}</code></td>
+            <td>{{ label_size.width }}&times;{{ label_size.height }} in</td>
+            <td class="text-end">
+              <a href="/playground/{{ label.id.as_url() }}" class="contrast" role="button">Edit</a>
+              <button class="outline secondary" hx-delete="/labels/{{ label.id.as_url() }}"
+                hx-confirm="Are you sure you want to delete {{ label.name }}?">Delete</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% endif %}
 
     <a href="/playground" role="button">Visit Playground</a>
@@ -78,7 +80,7 @@
 
     {% if printers.is_empty() %}
     {% else %}
-    <figure>
+    <div class="overflow-auto">
       <table>
         <thead>
           <tr>
@@ -112,12 +114,10 @@
           {% endfor %}
         </tbody>
       </table>
-    </figure>
+    </div>
     {% endif %}
 
-    <form action="/printers">
-      <button>Add</button>
-    </form>
+    <a href="/printers" role="button">Add</a>
   </section>
 </main>
 {% endblock %}

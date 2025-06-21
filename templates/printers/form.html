@@ -19,6 +19,11 @@
   </label>
 </fieldset>
 
+<label data-connection-type="network">
+  Address
+  <input type="text" name="address" value="{{ self.address() }}">
+</label>
+
 <fieldset data-connection-type="cups">
   <label for="cups_device">CUPS Device</label>
   <select id="cups_device" name="uri">
@@ -29,12 +34,12 @@
 </fieldset>
 {% else %}
 <input type="hidden" name="connection_type" value="network">
-{% endmatch %}
 
-<label data-connection-type="network">
+<label>
   Address
   <input type="text" name="address" value="{{ self.address() }}">
 </label>
+{% endmatch %}
 
 <label>
   Density

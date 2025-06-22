@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use image::{imageops::FilterType::Lanczos3, DynamicImage, GenericImage, GenericImageView};
+use image::{DynamicImage, GenericImage, GenericImageView, imageops::FilterType::Lanczos3};
 use tera::Value;
 
 use crate::zpl;

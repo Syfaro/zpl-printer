@@ -757,10 +757,7 @@ async fn history(
     .into_response())
 }
 
-type AlertsValues<'a> = Vec<(
-    &'a alert::Model,
-    Option<printer::Model>,
-)>;
+type AlertsValues<'a> = Vec<(&'a alert::Model, Option<printer::Model>)>;
 
 #[derive(Template)]
 #[template(path = "alerts/index.html")]
@@ -802,7 +799,8 @@ async fn alerts(
         .await?
         .unwrap_or_default();
 
-    let printers: Vec<Option<printer::Model>> = entries.load_one(printer::Entity, &state.db).await?;
+    let printers: Vec<Option<printer::Model>> =
+        entries.load_one(printer::Entity, &state.db).await?;
 
     let alerts = izip!(&entries, printers).collect_vec();
 

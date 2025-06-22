@@ -4608,7 +4608,7 @@ dependencies = [
 
 [[package]]
 name = "zpl-printer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "askama",
  "askama_axum",

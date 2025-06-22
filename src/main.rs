@@ -90,7 +90,14 @@ async fn main() -> eyre::Result<()> {
             None
         };
 
-        alert_listener(db, alerts_addr, telegram, token.clone()).await?;
+        alert_listener(
+            db,
+            alerts_addr,
+            telegram,
+            config.include_complete_alerts,
+            token.clone(),
+        )
+        .await?;
     }
 
     tracing::info!("listening on {}", config.address);
@@ -126,6 +133,7 @@ async fn alert_listener(
     db: DatabaseConnection,
     addr: SocketAddr,
     telegram: Option<TelegramAlertConfig>,
+    include_complete_alerts: bool,
     token: CancellationToken,
 ) -> eyre::Result<tokio::task::JoinHandle<eyre::Result<()>>> {
     let listener = TcpListener::bind(addr).await?;
@@ -136,7 +144,7 @@ async fn alert_listener(
     Ok(tokio::spawn(async move {
         let message_regex = Regex::new(
             r"^(?P<alert_type>[A-Z ]+): (?P<alert_message>[A-Z ]+) \[(?P<timestamp>[0-9 :-]+)\] \[(?P<unique_id>\w+)\]",
-        )?;
+        ).unwrap();
 
         loop {
             tokio::select! {
@@ -151,7 +159,9 @@ async fn alert_listener(
                         &db,
                         &client,
                         telegram.as_ref(),
-                        &message_regex, socket
+                        include_complete_alerts,
+                        &message_regex,
+                        socket
                     ).await {
                         tracing::error!("could not process printer alert: {err}");
                     }
@@ -167,6 +177,7 @@ async fn process_alert(
     db: &DatabaseConnection,
     client: &reqwest::Client,
     telegram: Option<&TelegramAlertConfig>,
+    include_complete_alerts: bool,
     message_regex: &Regex,
     mut socket: TcpStream,
 ) -> eyre::Result<()> {
@@ -177,6 +188,14 @@ async fn process_alert(
     let captures = message_regex
         .captures(&s)
         .ok_or_else(|| eyre::eyre!("alert data could not be parsed: {s}"))?;
+
+    if !include_complete_alerts
+        && &captures["alert_type"] == "ALERT"
+        && &captures["alert_message"] == "PQ JOB COMPLETED"
+    {
+        tracing::trace!("got complete alert, skipping");
+        return Ok(());
+    }
 
     let printer = printer::Entity::find()
         .filter(printer::Column::UniqueId.eq(&captures["unique_id"]))
@@ -237,6 +256,9 @@ struct Config {
     /// Address to receive sent printer alerts.
     #[clap(long, env)]
     alerts_address: Option<SocketAddr>,
+    /// If "PQ JOB COMPLETED" alerts should be recorded.
+    #[clap(long, env)]
+    include_complete_alerts: bool,
     #[command(flatten)]
     alerts_telegram: TelegramConfig,
     /// Host for CUPS server, if one should be used.

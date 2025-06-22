@@ -50,6 +50,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/playground/:id", get(playground))
         .route("/playground/print/:id", post(playground_print))
         .route("/history", get(history))
+        .route("/alerts", get(alerts))
 }
 
 #[derive(Template, Default)]
@@ -203,6 +204,7 @@ struct PrinterFormTemplate {
     current_size: Option<label_size::Model>,
     label_sizes: Vec<label_size::Model>,
 
+    unique_id: String,
     name: String,
     dpmm: i16,
     connection: Option<PrinterConnection>,
@@ -243,6 +245,9 @@ struct AddPrinterTemplate {
 #[derive(Debug, Deserialize)]
 struct PrinterForm {
     name: String,
+    #[serde(default)]
+    #[serde_as(as = "NoneAsEmptyString")]
+    unique_id: Option<String>,
     #[serde(flatten)]
     connection: Option<PrinterConnection>,
     dpmm: i16,
@@ -301,6 +306,7 @@ async fn printers(
                     current_size: None,
                     label_sizes,
 
+                    unique_id: "".to_string(),
                     name: "".to_string(),
                     dpmm: 8,
                     connection: None,
@@ -326,6 +332,7 @@ async fn printers(
             };
 
             let printer = printer::ActiveModel {
+                unique_id: Set(form.unique_id),
                 id: Set(Uuid::now_v7()),
                 name: Set(form.name),
                 dpmm: Set(form.dpmm),
@@ -374,6 +381,7 @@ async fn printer(
                 current_size,
                 label_sizes,
 
+                unique_id: printer.unique_id.clone().unwrap_or_default(),
                 connection: serde_json::from_value(printer.connection.clone())?,
                 name: printer.name.clone(),
                 dpmm: printer.dpmm,
@@ -388,6 +396,7 @@ async fn printer(
                 .ok_or_else(|| eyre::eyre!("missing connection"))?;
 
             let mut printer: printer::ActiveModel = printer.into();
+            printer.unique_id = Set(form.unique_id);
             printer.name = Set(form.name);
             printer.connection = Set(serde_json::to_value(connection)?);
             printer.dpmm = Set(form.dpmm);
@@ -742,6 +751,63 @@ async fn history(
 
     Ok(HistoryTemplate {
         history,
+        prev_page: page_id(next_items.prev_page, first_id),
+        next_page: page_id(next_items.next_page, last_id),
+    }
+    .into_response())
+}
+
+type AlertsValues<'a> = Vec<(
+    &'a alert::Model,
+    Option<printer::Model>,
+)>;
+
+#[derive(Template)]
+#[template(path = "alerts/index.html")]
+struct AlertsTemplate<'a> {
+    alerts: AlertsValues<'a>,
+    next_page: Option<UrlId>,
+    prev_page: Option<UrlId>,
+}
+
+async fn alerts(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Response, AppError> {
+    const PAGE_COUNT: u64 = 25;
+
+    let mut alerts = alert::Entity::find().cursor_by(alert::Column::Id);
+
+    if let Some(before) = query.before {
+        alerts.before(before.0).last(PAGE_COUNT);
+    } else if let Some(after) = query.after {
+        alerts.after(after.0).first(PAGE_COUNT);
+    } else {
+        alerts.last(PAGE_COUNT);
+    }
+
+    let mut entries = alerts.all(&state.db).await?;
+    entries.reverse();
+
+    let first_id = entries.first().map(|entry| entry.id);
+    let last_id = entries.last().map(|entry| entry.id);
+
+    let next_items: NextItems =
+        NextItems::find_by_statement(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT exists(SELECT 1 one FROM alert WHERE id > $1 LIMIT 1) prev_page, exists(SELECT 1 one FROM alert WHERE id < $2 LIMIT 1) next_page"#,
+            [first_id.into(), last_id.into()],
+        ))
+        .one(&state.db)
+        .await?
+        .unwrap_or_default();
+
+    let printers: Vec<Option<printer::Model>> = entries.load_one(printer::Entity, &state.db).await?;
+
+    let alerts = izip!(&entries, printers).collect_vec();
+
+    Ok(AlertsTemplate {
+        alerts,
         prev_page: page_id(next_items.prev_page, first_id),
         next_page: page_id(next_items.next_page, last_id),
     }

@@ -5,6 +5,11 @@
   <input type="text" required name="name" value="{{ name }}">
 </label>
 
+<label>
+  Unique ID
+  <input type="text" name="unique_id" value="{{ unique_id }}">
+</label>
+
 {% match cups_devices %}
 {% when Some with (cups_devices) %}
 <fieldset>

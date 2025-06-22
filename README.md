@@ -28,6 +28,14 @@ Additionally, all fields must be set to apply to each label (the "L" flag).
 
 This feature is not supported when printer is configured using CUPS.
 
+### Alerts
+
+This tool can be configured to record and notify for printer alerts.
+
+When the `alerts_address` option is set, it listens for TCP connections on that
+address from printers. Upon receiving an alert, it is saved and forwarded to any
+alert targets.
+
 ## API
 
 ### `POST /api/v1/print`

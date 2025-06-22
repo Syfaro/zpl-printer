@@ -13,10 +13,14 @@ pub struct Model {
     pub label_size_id: Option<Uuid>,
     #[sea_orm(column_type = "JsonBinary")]
     pub connection: Json,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub unique_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(has_many = "super::alert::Entity")]
+    Alert,
     #[sea_orm(has_many = "super::history::Entity")]
     History,
     #[sea_orm(
@@ -27,6 +31,12 @@ pub enum Relation {
         on_delete = "NoAction"
     )]
     LabelSize,
+}
+
+impl Related<super::alert::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Alert.def()
+    }
 }
 
 impl Related<super::history::Entity> for Entity {

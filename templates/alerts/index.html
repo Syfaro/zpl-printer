@@ -1,0 +1,77 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<main class="container">
+  <section>
+    <h1>Alerts</h1>
+
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Printer</th>
+          <th scope="col">Received At</th>
+          <th scope="col">Printer Timestamp</th>
+          <th scope="col">Type</th>
+          <th scope="col">Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for (entry, printer) in alerts %}
+        <tr>
+          <th scope="row">
+            {% match printer %}
+            {% when Some with (printer) %}
+            <a href="/printers/{{ printer.id.as_url() }}">{{ printer.name }}</a>
+            {% else %}
+            {{ entry.unique_id }}
+            {% endmatch %}
+          </th>
+          <td>
+            <span class="local-time" data-timestamp="{{ entry.created_at.timestamp() }}">{{ entry.created_at }}</span>
+          </td>
+          <td>
+            {{ entry.printer_timestamp }}
+          </td>
+          <td>
+            {{ entry.alert_type }}
+          </td>
+          <td>
+            {{ entry.alert_message }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="text-end">
+      {% match prev_page %}
+      {% when Some with (prev_page) %}
+      <a role="button" href="/alerts?after={{ prev_page.as_url() }}">Previous</a>
+      {% else %}
+      <button disabled>Previous</button>
+      {% endmatch %}
+
+      {% match next_page %}
+      {% when Some with (next_page) %}
+      <a role="button" href="/alerts?before={{ next_page.as_url() }}">Next page</a>
+      {% else %}
+      <button disabled>Next page</button>
+      {% endmatch %}
+    </div>
+  </section>
+</main>
+
+<script>
+  const dateTimeFormat = new Intl.DateTimeFormat("default", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+  [...document.querySelectorAll(".local-time")].forEach((elem) => {
+    const timestamp = elem.dataset.timestamp;
+    const date = new Date(timestamp * 1e3);
+
+    elem.replaceChildren(document.createTextNode(dateTimeFormat.format(date)));
+  });
+</script>
+{% endblock %}

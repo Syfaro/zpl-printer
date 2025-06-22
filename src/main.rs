@@ -7,6 +7,7 @@ use axum_prometheus::PrometheusMetricLayer;
 use clap::Parser;
 use ipp::prelude::{AsyncIppClient, IppOperationBuilder, IppPayload, Uri};
 use lru::LruCache;
+use regex::Regex;
 use sea_orm::{
     ActiveValue::NotSet, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
@@ -14,9 +15,10 @@ use sha2::{Digest, Sha256};
 use tap::TapFallible;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpListener, TcpStream},
     sync::Mutex,
 };
+use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultOnRequest, DefaultOnResponse};
 use tracing::{Level, instrument};
 
@@ -24,8 +26,9 @@ use entities::{label, label_size, printer};
 use migration::{Migrator, MigratorTrait, SimpleExpr};
 use uuid::Uuid;
 
-use crate::entities::history;
+use crate::entities::{alert, history};
 
+#[allow(unused_imports)]
 mod entities;
 mod template;
 mod web;
@@ -51,7 +54,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     let state = Arc::new(web::AppState {
-        db,
+        db: db.clone(),
         image_cache: Mutex::new(LruCache::new(config.cached_images)),
         client: Default::default(),
         skip: config.skip,
@@ -75,10 +78,150 @@ async fn main() -> eyre::Result<()> {
         )
         .layer(prom_layer);
 
+    let token = shutdown_signal().await;
+
+    if let Some(alerts_addr) = config.alerts_address {
+        let telegram = if let (Some(api_token), Some(chat_id)) = (
+            config.alerts_telegram.bot_api_token,
+            config.alerts_telegram.chat_id,
+        ) {
+            Some(TelegramAlertConfig { api_token, chat_id })
+        } else {
+            None
+        };
+
+        alert_listener(db, alerts_addr, telegram, token.clone()).await?;
+    }
+
     tracing::info!("listening on {}", config.address);
     Server::bind(&config.address)
         .serve(app.into_make_service())
+        .with_graceful_shutdown(token.cancelled())
         .await?;
+
+    Ok(())
+}
+
+async fn shutdown_signal() -> CancellationToken {
+    let token = CancellationToken::new();
+
+    tokio::spawn({
+        let token = token.clone();
+        async move {
+            tokio::signal::ctrl_c().await.unwrap();
+            tracing::info!("shutting down");
+            token.cancel();
+        }
+    });
+
+    token
+}
+
+struct TelegramAlertConfig {
+    api_token: String,
+    chat_id: i64,
+}
+
+async fn alert_listener(
+    db: DatabaseConnection,
+    addr: SocketAddr,
+    telegram: Option<TelegramAlertConfig>,
+    token: CancellationToken,
+) -> eyre::Result<tokio::task::JoinHandle<eyre::Result<()>>> {
+    let listener = TcpListener::bind(addr).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()?;
+
+    Ok(tokio::spawn(async move {
+        let message_regex = Regex::new(
+            r"^(?P<alert_type>[A-Z ]+): (?P<alert_message>[A-Z ]+) \[(?P<timestamp>[0-9 :-]+)\] \[(?P<unique_id>\w+)\]",
+        )?;
+
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    break;
+                }
+
+                res = listener.accept() => {
+                    let (socket, _) = res?;
+
+                    if let Err(err) = process_alert(
+                        &db,
+                        &client,
+                        telegram.as_ref(),
+                        &message_regex, socket
+                    ).await {
+                        tracing::error!("could not process printer alert: {err}");
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }))
+}
+
+async fn process_alert(
+    db: &DatabaseConnection,
+    client: &reqwest::Client,
+    telegram: Option<&TelegramAlertConfig>,
+    message_regex: &Regex,
+    mut socket: TcpStream,
+) -> eyre::Result<()> {
+    let mut buf = Vec::with_capacity(1024);
+    tokio::time::timeout(Duration::from_secs(3), socket.read_to_end(&mut buf)).await??;
+    let s = String::from_utf8(buf)?;
+
+    let captures = message_regex
+        .captures(&s)
+        .ok_or_else(|| eyre::eyre!("alert data could not be parsed: {s}"))?;
+
+    let printer = printer::Entity::find()
+        .filter(printer::Column::UniqueId.eq(&captures["unique_id"]))
+        .one(db)
+        .await?;
+
+    let printer_timestamp =
+        chrono::NaiveDateTime::parse_from_str(&captures["timestamp"], "%Y-%m-%d %H:%M:%S")?;
+
+    let alert = alert::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        alert_type: Set(captures["alert_type"].to_string()),
+        alert_message: Set(captures["alert_message"].to_string()),
+        printer_timestamp: Set(printer_timestamp),
+        unique_id: Set(captures["unique_id"].to_string()),
+        printer_id: Set(printer.as_ref().map(|printer| printer.id)),
+        ..Default::default()
+    };
+
+    alert::Entity::insert(alert).exec(db).await?;
+    tracing::debug!("recorded alert");
+
+    if let Some(telegram) = telegram {
+        let name = printer
+            .as_ref()
+            .map(|printer| printer.name.as_str())
+            .unwrap_or(&captures["unique_id"]);
+        let text = format!(
+            "{name} Printer Alert!\n\n{}: {}",
+            &captures["alert_type"], &captures["alert_message"]
+        );
+
+        client
+            .post(format!(
+                "https://api.telegram.org/bot{}/sendMessage",
+                telegram.api_token
+            ))
+            .json(&serde_json::json!({
+                "chat_id": telegram.chat_id,
+                "text": text,
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+    }
 
     Ok(())
 }
@@ -91,6 +234,11 @@ struct Config {
     /// Address where http server is bound.
     #[clap(long, env, default_value = "0.0.0.0:3000")]
     address: SocketAddr,
+    /// Address to receive sent printer alerts.
+    #[clap(long, env)]
+    alerts_address: Option<SocketAddr>,
+    #[command(flatten)]
+    alerts_telegram: TelegramConfig,
     /// Host for CUPS server, if one should be used.
     #[clap(long, env)]
     cups_host: Option<Uri>,
@@ -100,6 +248,24 @@ struct Config {
     /// Skip printing labels, for testing.
     #[clap(short, long, env)]
     skip: bool,
+}
+
+#[derive(Clone, clap::Args)]
+struct TelegramConfig {
+    /// Telegram API token for sending alerts.
+    #[clap(
+        long = "telegram-api-token",
+        env = "TELEGRAM_API_TOKEN",
+        requires = "chat_id"
+    )]
+    bot_api_token: Option<String>,
+    /// Telegram chat ID for sending alerts.
+    #[clap(
+        long = "telegram-chat-id",
+        env = "TELEGRAM_CHAT_ID",
+        requires = "bot_api_token"
+    )]
+    chat_id: Option<i64>,
 }
 
 struct AppError(eyre::Error);

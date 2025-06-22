@@ -2,6 +2,7 @@
 
 pub mod prelude;
 
+pub mod alert;
 pub mod history;
 pub mod label;
 pub mod label_size;

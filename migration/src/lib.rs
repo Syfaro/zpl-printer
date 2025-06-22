@@ -6,6 +6,7 @@ mod m20230628_165729_labels;
 mod m20230706_195504_history;
 mod m20250620_183213_host_verifications;
 mod m20250621_002016_printer_connections;
+mod m20250622_205523_printer_alerts;
 
 pub struct Migrator;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20230706_195504_history::Migration),
             Box::new(m20250620_183213_host_verifications::Migration),
             Box::new(m20250621_002016_printer_connections::Migration),
+            Box::new(m20250622_205523_printer_alerts::Migration),
         ]
     }
 }

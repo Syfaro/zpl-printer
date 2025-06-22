@@ -1,6 +1,9 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeSet, HashMap, HashSet},
+};
 
-use image::imageops::FilterType::Lanczos3;
+use image::{DynamicImage, GenericImage, GenericImageView, imageops::FilterType::Lanczos3};
 use tera::{
     Context, Tera, Value,
     ast::{Expr, ExprVal, FunctionCall, In, LogicExpr, MacroCall, MathExpr, Node},
@@ -82,14 +85,62 @@ impl tera::Filter for ImageFilter {
             .get("dithering")
             .and_then(|val| tera::from_value(val.clone()).ok());
 
-        let height = args.get("height").and_then(|val| val.as_u64());
-        let width = args.get("width").and_then(|val| val.as_u64());
+        let exact = args
+            .get("exact")
+            .and_then(|val| val.as_bool())
+            .unwrap_or_default();
+        let center = args
+            .get("center")
+            .and_then(|val| val.as_bool())
+            .unwrap_or(true);
+        let expand = args
+            .get("expand")
+            .and_then(|val| val.as_bool())
+            .unwrap_or(true);
+        let height = args
+            .get("height")
+            .and_then(|val| val.as_u64())
+            .and_then(|val| val.try_into().ok());
+        let width = args
+            .get("width")
+            .and_then(|val| val.as_u64())
+            .and_then(|val| val.try_into().ok());
+
+        let (im_width, im_height) = im.dimensions();
 
         let im = match (height, width) {
-            (Some(height), Some(width)) => im.resize_exact(width as u32, height as u32, Lanczos3),
-            (Some(height), _) => im.resize(im.width(), height as u32, Lanczos3),
-            (_, Some(width)) => im.resize(width as u32, im.height(), Lanczos3),
+            (Some(height), Some(width)) => {
+                if (im_width > width || im_height > height) || expand {
+                    if exact {
+                        im.resize_exact(width, height, Lanczos3)
+                    } else {
+                        im.resize(width, height, Lanczos3)
+                    }
+                } else {
+                    im
+                }
+            }
+            (Some(height), _) => {
+                if im_height > height || expand {
+                    im.resize(im.width(), height, Lanczos3)
+                } else {
+                    im
+                }
+            }
+            (_, Some(width)) => {
+                if im_width > width || expand {
+                    im.resize(width, im.height(), Lanczos3)
+                } else {
+                    im
+                }
+            }
             _ => im,
+        };
+
+        let im = if center {
+            place_image(&im, height, width)
+        } else {
+            Cow::Borrowed(&im)
         };
 
         Ok(tera::Value::String(zpl::image_to_gf(&im, dithering)))
@@ -98,6 +149,74 @@ impl tera::Filter for ImageFilter {
     fn is_safe(&self) -> bool {
         true
     }
+}
+
+#[tracing::instrument(skip(im))]
+fn place_image<'a>(
+    im: &'a DynamicImage,
+    height: Option<u32>,
+    width: Option<u32>,
+) -> Cow<'a, DynamicImage> {
+    let (im_width, im_height) = im.dimensions();
+    tracing::trace!(
+        width = im_width,
+        height = im_height,
+        "got resized image dimensions"
+    );
+
+    let (height, width, placement_x, placement_y) = match (height, width) {
+        (Some(height), Some(width)) => {
+            if im_width == width && im_height == height {
+                tracing::trace!(
+                    "requested height and width exactly matched resized height and width"
+                );
+                return Cow::Borrowed(im);
+            }
+
+            (
+                height,
+                width,
+                (width - im_width) / 2,
+                (height - im_height) / 2,
+            )
+        }
+        (Some(height), _) => {
+            if im_height == height {
+                tracing::trace!("requested height exactly matched resized height");
+                return Cow::Borrowed(im);
+            }
+
+            (height, im_width, 0, (height - im_height) / 2)
+        }
+        (_, Some(width)) => {
+            if im_width == width {
+                tracing::trace!("requested width exactly matched resized width");
+                return Cow::Borrowed(im);
+            }
+
+            (im_height, width, (width - im_width) / 2, 0)
+        }
+        (None, None) => {
+            tracing::trace!("no requested height and width");
+            return Cow::Borrowed(im);
+        }
+    };
+
+    tracing::trace!(
+        height,
+        width,
+        placement_x,
+        placement_y,
+        "calculated new size and placements"
+    );
+
+    let mut new_im = image::ImageBuffer::from_pixel(width, height, image::Rgba([255, 255, 255, 0]));
+
+    new_im
+        .copy_from(im, placement_x, placement_y)
+        .expect("copied image should always fit");
+
+    Cow::Owned(DynamicImage::from(new_im))
 }
 
 pub fn render_label(content: &str, context: &Context) -> tera::Result<String> {

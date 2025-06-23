@@ -39,47 +39,15 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        match manager.get_database_backend() {
-            DatabaseBackend::Sqlite => {
-                let conn = manager.get_connection();
-
-                conn.execute_unprepared("ALTER TABLE printer RENAME TO printer_old")
-                    .await?;
-
-                manager
-                    .create_table(
-                        Table::create()
-                            .table(Printer::Table)
-                            .if_not_exists()
-                            .col(ColumnDef::new(Printer::Id).uuid().not_null().primary_key())
-                            .col(ColumnDef::new(Printer::Name).text().not_null())
-                            .col(ColumnDef::new(Printer::Connection).json_binary().not_null())
-                            .col(ColumnDef::new(Printer::Dpmm).tiny_unsigned().not_null())
-                            .col(ColumnDef::new(Printer::LabelSizeId).uuid())
-                            .foreign_key(
-                                ForeignKey::create()
-                                    .from(Printer::Table, Printer::LabelSizeId)
-                                    .to(LabelSize::Table, LabelSize::Id),
-                            )
-                            .to_owned(),
-                    )
-                    .await?;
-
-                conn.execute_unprepared("INSERT INTO printer SELECT * FROM printer_old")
-                    .await?;
-
-                conn.execute_unprepared("DROP TABLE printer_old").await?;
-            }
-            _ => {
-                manager
-                    .alter_table(
-                        Table::alter()
-                            .table(Printer::Table)
-                            .modify_column(ColumnDef::new(Printer::Connection).not_null())
-                            .to_owned(),
-                    )
-                    .await?;
-            }
+        if !matches!(manager.get_database_backend(), DatabaseBackend::Sqlite) {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(Printer::Table)
+                        .modify_column(ColumnDef::new(Printer::Connection).not_null())
+                        .to_owned(),
+                )
+                .await?;
         }
 
         Ok(())

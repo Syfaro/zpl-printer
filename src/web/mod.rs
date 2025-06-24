@@ -82,7 +82,7 @@ fn hx_load(request_type: &RequestType, reload: bool, fallback: &str) -> Result<R
     match request_type {
         RequestType::Normal => Ok(Redirect::to(fallback).into_response()),
         RequestType::Htmx { current_url, .. } => {
-            let mut resp = StatusCode::NO_CONTENT.into_response();
+            let mut resp = StatusCode::OK.into_response();
 
             let location = if reload {
                 current_url.as_deref().unwrap_or(fallback)

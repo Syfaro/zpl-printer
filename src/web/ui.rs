@@ -342,7 +342,7 @@ async fn printers(
 
             printer.insert(&state.db).await?;
 
-            hx_load(&request_type, true, "/labels")
+            hx_load(&request_type, false, "/labels")
         }
         _ => Err(eyre::eyre!("unknown method").into()),
     }
@@ -408,7 +408,7 @@ async fn printer(
 
             printer.update(&state.db).await?;
 
-            hx_load(&request_type, true, "/labels")
+            hx_load(&request_type, false, "/labels")
         }
         _ => Err(eyre::eyre!("unknown method").into()),
     }

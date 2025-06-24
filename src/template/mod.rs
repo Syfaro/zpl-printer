@@ -77,6 +77,8 @@ pub struct VariableExtractor {
 }
 
 impl VariableExtractor {
+    const LOOP_VARIABLES: [&str; 4] = ["loop.index", "loop.index0", "loop.first", "loop.last"];
+
     pub fn extract(content: &str) -> tera::Result<BTreeSet<String>> {
         let mut tera = get_tera();
         tera.add_raw_template("label.zpl", content)?;
@@ -84,49 +86,65 @@ impl VariableExtractor {
         let mut extractor = VariableExtractor::default();
 
         for template in tera.templates.into_values() {
-            extractor.expand_node(template.ast);
+            extractor.expand_node(template.ast, false);
         }
 
         Ok(extractor.variables)
     }
 
-    fn expand_node(&mut self, nodes: impl IntoIterator<Item = Node>) {
+    fn expand_node(&mut self, nodes: impl IntoIterator<Item = Node>, in_loop: bool) {
         for node in nodes {
             match node {
-                Node::VariableBlock(_, expr) => self.expand_expr(expr),
-                Node::MacroDefinition(_, block, _) => self.expand_node(block.body),
+                Node::VariableBlock(_, expr) => self.expand_expr(expr, in_loop),
+                Node::MacroDefinition(_, block, _) => self.expand_node(block.body, in_loop),
                 Node::Set(_, set) => {
                     let _span = tracing::trace_span!("set node", key = set.key).entered();
 
-                    if self.variables.contains(&set.key) {
-                        tracing::trace!("variable was already known");
-                    } else {
-                        tracing::trace!("variables did not contain key, adding to exclusions");
-                        self.exclusions.insert(set.key);
+                    self.add_variable(set.key, in_loop);
+                    self.expand_expr(set.value, in_loop);
+                }
+                Node::FilterSection(_, block, _) => self.expand_node(block.body, in_loop),
+                Node::Forloop(_, block, _) => {
+                    self.add_variable(block.value, true);
+                    if let Some(key) = block.key {
+                        self.add_variable(key, true);
                     }
 
-                    self.expand_expr(set.value);
+                    self.expand_node(block.body, true);
                 }
-                Node::FilterSection(_, block, _) => self.expand_node(block.body),
-                Node::Forloop(_, block, _) => self.expand_node(block.body),
                 Node::If(stmt, _) => stmt.conditions.into_iter().for_each(|(_, expr, nodes)| {
-                    self.expand_expr(expr);
-                    self.expand_node(nodes);
+                    self.expand_expr(expr, in_loop);
+                    self.expand_node(nodes, in_loop);
                 }),
-                Node::Block(_, block, _) => self.expand_node(block.body),
+                Node::Block(_, block, _) => self.expand_node(block.body, in_loop),
                 _ => (),
             }
         }
     }
 
-    fn expand_expr(&mut self, expr: Expr) {
-        self.expand_expr_val(expr.val)
+    #[tracing::instrument(skip(self))]
+    fn add_variable(&mut self, name: String, in_loop: bool) {
+        if self.variables.contains(&name) {
+            tracing::trace!("variable was already known");
+        } else {
+            tracing::trace!("variables did not contain key, adding to exclusions");
+            self.exclusions.insert(name);
+        }
     }
 
-    fn expand_expr_val(&mut self, expr_val: ExprVal) {
+    fn expand_expr(&mut self, expr: Expr, in_loop: bool) {
+        self.expand_expr_val(expr.val, in_loop)
+    }
+
+    fn expand_expr_val(&mut self, expr_val: ExprVal, in_loop: bool) {
         match expr_val {
             ExprVal::Ident(name) => {
                 let _span = tracing::trace_span!("expr ident", name).entered();
+
+                if in_loop && Self::LOOP_VARIABLES.contains(&name.as_str()) {
+                    tracing::trace!("in loop and variable was loop.");
+                    return;
+                }
 
                 if self.exclusions.contains(&name) {
                     tracing::trace!("name was in exclusions");
@@ -136,27 +154,29 @@ impl VariableExtractor {
                 }
             }
             ExprVal::Math(MathExpr { lhs, rhs, .. }) => {
-                self.expand_expr(*lhs);
-                self.expand_expr(*rhs);
+                self.expand_expr(*lhs, in_loop);
+                self.expand_expr(*rhs, in_loop);
             }
             ExprVal::Logic(LogicExpr { lhs, rhs, .. }) => {
-                self.expand_expr(*lhs);
-                self.expand_expr(*rhs);
+                self.expand_expr(*lhs, in_loop);
+                self.expand_expr(*rhs, in_loop);
             }
-            ExprVal::MacroCall(MacroCall { args, .. }) => {
-                args.into_values().for_each(|value| self.expand_expr(value))
-            }
-            ExprVal::FunctionCall(FunctionCall { args, .. }) => {
-                args.into_values().for_each(|value| self.expand_expr(value))
-            }
-            ExprVal::Array(exprs) => exprs.into_iter().for_each(|value| self.expand_expr(value)),
+            ExprVal::MacroCall(MacroCall { args, .. }) => args
+                .into_values()
+                .for_each(|value| self.expand_expr(value, in_loop)),
+            ExprVal::FunctionCall(FunctionCall { args, .. }) => args
+                .into_values()
+                .for_each(|value| self.expand_expr(value, in_loop)),
+            ExprVal::Array(exprs) => exprs
+                .into_iter()
+                .for_each(|value| self.expand_expr(value, in_loop)),
             ExprVal::StringConcat(concat) => concat
                 .values
                 .into_iter()
-                .for_each(|value| self.expand_expr_val(value)),
+                .for_each(|value| self.expand_expr_val(value, in_loop)),
             ExprVal::In(In { lhs, rhs, .. }) => {
-                self.expand_expr(*lhs);
-                self.expand_expr(*rhs);
+                self.expand_expr(*lhs, in_loop);
+                self.expand_expr(*rhs, in_loop);
             }
             _ => (),
         }

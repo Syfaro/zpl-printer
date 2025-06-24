@@ -830,6 +830,8 @@ struct ImageForm {
     height: String,
     printers: Vec<printer::Model>,
     file_name: String,
+    storage_device: String,
+    printer_id: Uuid,
 }
 
 impl Default for ImageForm {
@@ -844,6 +846,8 @@ impl Default for ImageForm {
             height: "".to_string(),
             printers: Default::default(),
             file_name: "".to_string(),
+            storage_device: "R:".to_string(),
+            printer_id: Uuid::nil(),
         }
     }
 }
@@ -953,7 +957,7 @@ async fn images(
 
             if matches!(action.as_deref(), Some("Store")) {
                 let (Some(file_name), Some(storage_device), Some(printer_id)) =
-                    (file_name.as_deref(), storage_device, printer_id)
+                    (file_name.as_deref(), storage_device.as_deref(), printer_id)
                 else {
                     return Err(eyre::eyre!("missing parameters for store action").into());
                 };
@@ -1007,6 +1011,8 @@ async fn images(
                     height: src_height.map(|val| val.to_string()).unwrap_or_default(),
                     printers,
                     file_name: file_name.unwrap_or_default(),
+                    storage_device: storage_device.unwrap_or_else(|| "R:".to_string()),
+                    printer_id: printer_id.map(|id| id.0).unwrap_or_else(Uuid::nil),
                 },
             }))
         }

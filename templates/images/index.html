@@ -65,10 +65,10 @@
           <fieldset>
             <label>Storage Device</label>
             <select name="storage_device">
-              <option value="R:">R:</option>
-              <option value="E:">E:</option>
-              <option value="B:">B:</option>
-              <option value="A:">A:</option>
+              <option value="R:" {% if form.storage_device == "R:" %}checked{% endif %}>R:</option>
+              <option value="E:" {% if form.storage_device == "E:" %}checked{% endif %}>E:</option>
+              <option value="B:" {% if form.storage_device == "B:" %}checked{% endif %}>B:</option>
+              <option value="A:" {% if form.storage_device == "A:" %}checked{% endif %}>A:</option>
             </select>
           </fieldset>
 
@@ -76,7 +76,7 @@
             <label>Printer</label>
             <select name="printer_id">
               {% for printer in form.printers %}
-              <option value="{{ printer.id.as_url() }}">{{ printer.name }}</option>
+              <option value="{{ printer.id.as_url() }}" {% if printer.id == form.printer_id %}selected{% endif %}>{{ printer.name }}</option>
               {% endfor %}
             </select>
           </fieldset>

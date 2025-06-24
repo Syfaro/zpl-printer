@@ -2,12 +2,11 @@ mod api;
 mod ui;
 
 pub use api::routes as api_routes;
-use askama_axum::IntoResponse;
 use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
     http::{HeaderValue, StatusCode, request::Parts},
-    response::{Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
 };
 use base64::Engine;
 use ipp::prelude::AsyncIppClient;
@@ -99,7 +98,7 @@ fn hx_load(request_type: &RequestType, reload: bool, fallback: &str) -> Result<R
 }
 
 impl IntoResponse for AppError {
-    fn into_response(self) -> askama_axum::Response {
+    fn into_response(self) -> Response {
         (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()).into_response()
     }
 }

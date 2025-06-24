@@ -14,14 +14,14 @@ use nom::{
 };
 use tracing::{debug, instrument};
 
-#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DitheringType {
     Ordered,
     FloydSteinberg,
 }
 
-#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BinaryEncodingMethod {
     #[default]
@@ -38,6 +38,18 @@ pub fn image_to_gf(
     dithering: Option<DitheringType>,
     encoding: BinaryEncodingMethod,
 ) -> String {
+    let (cleaned_image, height, width_padded) = process_image(im, dithering);
+    let (field_data, line_size, total_size) =
+        encode_image(height, width_padded, encoding, &cleaned_image);
+
+    format!("^GFA,{total_size},{total_size},{line_size},{field_data}")
+}
+
+/// Convert an image for ZPL printing.
+pub fn process_image(
+    im: &DynamicImage,
+    dithering: Option<DitheringType>,
+) -> (ImageBuffer<Luma<u8>, Vec<u8>>, u32, u32) {
     // Convert image to grayscale with alpha channel. We need to make sure that
     // transparent pixels are set to white so they aren't printed.
     let im = im.to_luma_alpha8();
@@ -82,17 +94,27 @@ pub fn image_to_gf(
         None => (),
     }
 
+    (cleaned_image, height, width_padded)
+}
+
+/// Encode image using the provided encoding method.
+pub fn encode_image(
+    height: u32,
+    width_padded: u32,
+    encoding: BinaryEncodingMethod,
+    cleaned_image: &ImageBuffer<Luma<u8>, Vec<u8>>,
+) -> (String, usize, usize) {
     // Number of bytes that each line uses.
     let line_size = (width_padded / 8) as usize;
     // Total size of uncompressed data.
     let total_size = line_size * height as usize;
 
     let field_data = match encoding {
-        BinaryEncodingMethod::Hex => hex_encoding(line_size, height, width_padded, &cleaned_image),
-        BinaryEncodingMethod::Z64 => z64_encoding(line_size, height, width_padded, &cleaned_image),
+        BinaryEncodingMethod::Hex => hex_encoding(line_size, height, width_padded, cleaned_image),
+        BinaryEncodingMethod::Z64 => z64_encoding(line_size, height, width_padded, cleaned_image),
     };
 
-    format!("^GFA,{total_size},{total_size},{line_size},{field_data}")
+    (field_data, line_size, total_size)
 }
 
 // Create an iterator of byte data for each line of an image.

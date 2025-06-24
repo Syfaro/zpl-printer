@@ -1,0 +1,122 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<main class="container">
+  <section>
+    <h1>Images</h1>
+
+    {% block image_form %}
+    <form hx-post="" hx-encoding="multipart/form-data">
+      <div class="grid">
+        <div>
+          <fieldset>
+            <label>
+              Image
+              <input type="file" name="image" accept="image/png, image/jpeg, image/webp" id="new-image">
+              {% if let Some(existing_image) = form.existing_image %}
+              <input type="hidden" name="existing_image" value="{{ existing_image }}" id="existing-image">
+              {% endif %}
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Dithering Type</legend>
+            <label>
+              <input type="radio" name="dithering_type" value="ordered" {% if form.dithering_type == zpl::DitheringType::Ordered %}checked{% endif %}>
+              Ordered
+            </label>
+            <label>
+              <input type="radio" name="dithering_type" value="floyd_steinberg" {% if form.dithering_type == zpl::DitheringType::FloydSteinberg %}checked{% endif %}>
+              Floyd-Steinberg
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Encoding Method</legend>
+            <label>
+              <input type="radio" name="encoding_method" value="hex" {% if form.encoding_method == zpl::BinaryEncodingMethod::Hex %}checked{% endif %}>
+              Hex
+            </label>
+            <label>
+              <input type="radio" name="encoding_method" value="z64" {% if form.encoding_method == zpl::BinaryEncodingMethod::Z64 %}checked{% endif %}>
+              Z64
+            </label>
+          </fieldset>
+
+          <fieldset class="grid">
+            <label>
+              Width
+              <input type="number" name="width" value="{{ form.width }}">
+            </label>
+
+            <label>
+              Height
+              <input type="number" name="height" value="{{ form.height }}">
+            </label>
+          </fieldset>
+
+          <input type="submit" name="action" value="Generate">
+
+          <fieldset>
+            <label>File Name</label>
+            <input type="text" name="file_name" minlength="1" maxlength="8" pattern="[A-Za-z0-9]+" value="{{ form.file_name }}">
+          </fieldset>
+
+          <fieldset>
+            <label>Storage Device</label>
+            <select name="storage_device">
+              <option value="R:">R:</option>
+              <option value="E:">E:</option>
+              <option value="B:">B:</option>
+              <option value="A:">A:</option>
+            </select>
+          </fieldset>
+
+          <fieldset>
+            <label>Printer</label>
+            <select name="printer_id">
+              {% for printer in form.printers %}
+              <option value="{{ printer.id.as_url() }}">{{ printer.name }}</option>
+              {% endfor %}
+            </select>
+          </fieldset>
+
+          <input type="submit" name="action" value="Store">
+        </div>
+
+        <div>
+          {% if let Some(preview) = form.preview %}
+          <label>Preview</label>
+          <figure class="text-center p-1">
+            <img src="{{ preview }}">
+          </figure>
+          {% endif %}
+
+          {% if let Some(zpl) = form.zpl %}
+          <label>ZPL</label>
+          <pre><code id="zpl-code">{{ zpl }}</code></pre>
+
+          <p>
+            {{ zpl.len() }} bytes, <a href="#" id="copy-zpl">copy</a>
+          </p>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+
+    <script>
+      document.getElementById("copy-zpl").addEventListener("click", (ev) => {
+        ev.preventDefault();
+
+        const zpl = document.getElementById("zpl-code").innerHTML;
+        navigator.clipboard.writeText(zpl);
+      });
+
+      document.getElementById("new-image").addEventListener("change", (ev) => {
+        document.getElementById("existing-image")?.remove();
+      });
+    </script>
+    {% endblock %}
+  </section>
+</main>
+{% endblock %}

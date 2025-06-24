@@ -6,15 +6,15 @@ use std::{
 };
 
 use askama::Template;
-use askama_axum::IntoResponse;
 use axum::{
     Form, Router,
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State, multipart::Field},
     http::{Method, StatusCode},
-    response::{Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
 };
 use base64::Engine;
+use image::{EncodableLayout, ImageEncoder, imageops::FilterType::Lanczos3};
 use ipp::prelude::{AsyncIppClient, IppOperationBuilder};
 use itertools::{Itertools, izip};
 use rust_decimal::Decimal;
@@ -35,6 +35,7 @@ use crate::{
     render_zpl, send_print_job,
     template::{VariableExtractor, render_label},
     web::{AppState, AsUrl, RequestType, UrlId, hx_load},
+    zpl,
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -51,6 +52,21 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/playground/print/:id", post(playground_print))
         .route("/history", get(history))
         .route("/alerts", get(alerts))
+        .route("/images", get(images).post(images))
+}
+
+fn into_response<T: Template>(t: &T) -> Response {
+    match t.render() {
+        Ok(body) => {
+            let headers = [(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/html"),
+            )];
+
+            (headers, body).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 #[derive(Template, Default)]
@@ -83,12 +99,11 @@ async fn labels(State(state): State<Arc<AppState>>) -> Result<Response, AppError
         .all(&state.db)
         .await?;
 
-    Ok(LabelTemplate {
+    Ok(into_response(&LabelTemplate {
         labels,
         label_sizes,
         printers,
-    }
-    .into_response())
+    }))
 }
 
 async fn label(
@@ -300,7 +315,7 @@ async fn printers(
                 .all(&state.db)
                 .await?;
 
-            Ok(AddPrinterTemplate {
+            Ok(into_response(&AddPrinterTemplate {
                 form: PrinterFormTemplate {
                     cups_devices: cups_devices(state.ipp.as_ref()).await?,
                     current_size: None,
@@ -311,8 +326,7 @@ async fn printers(
                     dpmm: 8,
                     connection: None,
                 },
-            }
-            .into_response())
+            }))
         }
         Method::POST => {
             let Form(form) = form.ok_or_else(|| eyre::eyre!("missing form"))?;
@@ -375,7 +389,7 @@ async fn printer(
         .await?;
 
     match method {
-        Method::GET => Ok(PrinterTemplate {
+        Method::GET => Ok(into_response(&PrinterTemplate {
             form: PrinterFormTemplate {
                 cups_devices: cups_devices(state.ipp.as_ref()).await?,
                 current_size,
@@ -387,8 +401,7 @@ async fn printer(
                 dpmm: printer.dpmm,
             },
             printer,
-        }
-        .into_response()),
+        })),
         Method::PUT => {
             let Form(form) = form.ok_or_else(|| eyre::eyre!("missing form"))?;
             let connection = form
@@ -436,10 +449,10 @@ struct PlaygroundTemplate<'a> {
 }
 
 impl PlaygroundTemplate<'_> {
-    fn selected_dpmm(&self) -> i16 {
+    fn selected_dpmm(&self) -> &i16 {
         match &self.label {
-            Some(label) => label.dpmm,
-            None => 8,
+            Some(label) => &label.dpmm,
+            None => &8,
         }
     }
 
@@ -554,7 +567,7 @@ async fn playground(
         Ok(variables) => variables,
         Err(_err) if request_type.is_htmx() => return Ok(StatusCode::NO_CONTENT.into_response()),
         Err(err) => {
-            return Ok(PlaygroundTemplate {
+            return Ok(into_response(&PlaygroundTemplate {
                 zpl: &zpl,
                 fields: ZplFieldsTemplate::default(),
                 rendered: Err(get_template_error(err)),
@@ -562,8 +575,7 @@ async fn playground(
                 label_sizes,
                 printers,
                 label,
-            }
-            .into_response());
+            }));
         }
     };
 
@@ -601,15 +613,14 @@ async fn playground(
     };
 
     if request_type.is_htmx() {
-        return Ok(PlaygroundUpdateTemplate {
+        return Ok(into_response(&PlaygroundUpdateTemplate {
             fields,
             rendered,
             preview: image,
-        }
-        .into_response());
+        }));
     }
 
-    Ok(PlaygroundTemplate {
+    Ok(into_response(&PlaygroundTemplate {
         zpl: &zpl,
         fields,
         rendered,
@@ -617,8 +628,7 @@ async fn playground(
         label_sizes,
         printers,
         label,
-    }
-    .into_response())
+    }))
 }
 
 async fn playground_print(
@@ -749,12 +759,11 @@ async fn history(
 
     let history = izip!(&entries, variables, verifications, printers, labels).collect_vec();
 
-    Ok(HistoryTemplate {
+    Ok(into_response(&HistoryTemplate {
         history,
         prev_page: page_id(next_items.prev_page, first_id),
         next_page: page_id(next_items.next_page, last_id),
-    }
-    .into_response())
+    }))
 }
 
 type AlertsValues<'a> = Vec<(&'a alert::Model, Option<printer::Model>)>;
@@ -804,10 +813,203 @@ async fn alerts(
 
     let alerts = izip!(&entries, printers).collect_vec();
 
-    Ok(AlertsTemplate {
+    Ok(into_response(&AlertsTemplate {
         alerts,
         prev_page: page_id(next_items.prev_page, first_id),
         next_page: page_id(next_items.next_page, last_id),
+    }))
+}
+
+struct ImageForm {
+    existing_image: Option<String>,
+    preview: Option<String>,
+    zpl: Option<String>,
+    dithering_type: zpl::DitheringType,
+    encoding_method: zpl::BinaryEncodingMethod,
+    width: String,
+    height: String,
+    printers: Vec<printer::Model>,
+    file_name: String,
+}
+
+impl Default for ImageForm {
+    fn default() -> Self {
+        Self {
+            existing_image: None,
+            preview: None,
+            zpl: None,
+            dithering_type: zpl::DitheringType::Ordered,
+            encoding_method: zpl::BinaryEncodingMethod::Hex,
+            width: "".to_string(),
+            height: "".to_string(),
+            printers: Default::default(),
+            file_name: "".to_string(),
+        }
     }
-    .into_response())
+}
+
+#[derive(Template)]
+#[template(path = "images/index.html")]
+struct ImageTemplate {
+    form: ImageForm,
+}
+
+#[derive(Template)]
+#[template(path = "images/index.html", block = "image_form")]
+struct ImageFormTemplate {
+    form: ImageForm,
+}
+
+async fn parse_field<T: serde::de::DeserializeOwned>(field: Field<'_>) -> eyre::Result<T> {
+    parse_field_opt(field)
+        .await
+        .transpose()
+        .ok_or_else(|| eyre::eyre!("field was missing value"))?
+}
+
+async fn parse_field_opt<T: serde::de::DeserializeOwned>(
+    field: Field<'_>,
+) -> eyre::Result<Option<T>> {
+    let data = String::from_utf8(field.bytes().await?.to_vec())?;
+    if data.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_plain::from_str(&data)?))
+}
+
+async fn images(
+    State(state): State<Arc<AppState>>,
+    method: Method,
+    form: Option<Multipart>,
+) -> Result<Response, AppError> {
+    let printers = printer::Entity::find()
+        .order_by_asc(printer::Column::Name)
+        .all(&state.db)
+        .await?;
+
+    match (method, form) {
+        (Method::GET, _) => Ok(into_response(&ImageTemplate {
+            form: ImageForm {
+                printers,
+                ..Default::default()
+            },
+        })),
+        (Method::POST, Some(mut form)) => {
+            let mut action: Option<String> = None;
+            let mut dithering_type = zpl::DitheringType::Ordered;
+            let mut encoding_method = zpl::BinaryEncodingMethod::Hex;
+            let mut src_width: Option<u32> = None;
+            let mut src_height: Option<u32> = None;
+            let mut file_name: Option<String> = None;
+            let mut storage_device: Option<String> = None;
+            let mut printer_id: Option<UrlId> = None;
+
+            let mut image_data: Option<Vec<u8>> = None;
+
+            while let Some(field) = form.next_field().await? {
+                match field.name() {
+                    Some("image") => image_data = Some(field.bytes().await?.to_vec()),
+                    Some("existing_image") => {
+                        image_data =
+                            Some(base64::prelude::BASE64_URL_SAFE.decode(&field.bytes().await?)?)
+                    }
+                    Some("dithering_type") => dithering_type = parse_field(field).await?,
+                    Some("encoding_method") => encoding_method = parse_field(field).await?,
+                    Some("width") => src_width = parse_field_opt(field).await?,
+                    Some("height") => src_height = parse_field_opt(field).await?,
+                    Some("file_name") => file_name = parse_field_opt(field).await?,
+                    Some("storage_device") => storage_device = parse_field_opt(field).await?,
+                    Some("printer_id") => printer_id = parse_field_opt(field).await?,
+                    Some("action") => action = parse_field_opt(field).await?,
+                    _ => continue,
+                }
+            }
+
+            tracing::debug!(
+                ?action,
+                ?dithering_type,
+                ?encoding_method,
+                ?src_width,
+                ?src_height,
+                ?file_name,
+                ?storage_device,
+                ?printer_id,
+                "got fields"
+            );
+
+            let Some(image_data) = image_data else {
+                return Err(eyre::eyre!("missing image").into());
+            };
+
+            let mut im = image::load_from_memory(&image_data)?;
+
+            if let (Some(width), Some(height)) = (src_width, src_height) {
+                im = im.resize(width, height, Lanczos3);
+            }
+
+            let (im, height, width_padded) = zpl::process_image(&im, Some(dithering_type));
+            let (field_data, line_size, total_size) =
+                zpl::encode_image(height, width_padded, encoding_method, &im);
+
+            if matches!(action.as_deref(), Some("Store")) {
+                let (Some(file_name), Some(storage_device), Some(printer_id)) =
+                    (file_name.as_deref(), storage_device, printer_id)
+                else {
+                    return Err(eyre::eyre!("missing parameters for store action").into());
+                };
+
+                let printer = printer::Entity::find_by_id(printer_id.0)
+                    .one(&state.db)
+                    .await?
+                    .ok_or_else(|| eyre::eyre!("missing printer"))?;
+
+                let label = label::Model {
+                    id: Uuid::nil(),
+                    name: "Store Graphic".to_string(),
+                    label_size_id: printer.label_size_id.unwrap_or_default(),
+                    dpmm: 0,
+                    zpl: format!(
+                        "~DG{storage_device}{file_name}.GRF,{total_size},{line_size},{field_data}"
+                    ),
+                };
+
+                crate::send_print_job(
+                    &state.db,
+                    state.ipp.as_ref(),
+                    printer,
+                    label,
+                    Default::default(),
+                    state.skip,
+                    false,
+                )
+                .await?;
+            }
+
+            let mut buf = Vec::new();
+            let png = image::codecs::png::PngEncoder::new(&mut buf);
+            png.write_image(
+                im.as_bytes(),
+                width_padded,
+                height,
+                image::ColorType::L8.into(),
+            )?;
+
+            Ok(into_response(&ImageFormTemplate {
+                form: ImageForm {
+                    existing_image: Some(base64::prelude::BASE64_URL_SAFE.encode(&image_data)),
+                    preview: Some(encode_image_html(&buf)),
+                    zpl: Some(format!(
+                        "^GFA,{total_size},{total_size},{line_size},{field_data}"
+                    )),
+                    dithering_type,
+                    encoding_method,
+                    width: src_width.map(|val| val.to_string()).unwrap_or_default(),
+                    height: src_height.map(|val| val.to_string()).unwrap_or_default(),
+                    printers,
+                    file_name: file_name.unwrap_or_default(),
+                },
+            }))
+        }
+        _ => Err(eyre::eyre!("unknown method").into()),
+    }
 }

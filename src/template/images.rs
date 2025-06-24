@@ -29,6 +29,10 @@ impl tera::Filter for ImageFilter {
         let dithering: Option<zpl::DitheringType> = args
             .get("dithering")
             .and_then(|val| tera::from_value(val.clone()).ok());
+        let encoding: zpl::BinaryEncodingMethod = args
+            .get("encoding")
+            .and_then(|val| tera::from_value(val.clone()).ok())
+            .unwrap_or_default();
 
         let exact = args
             .get("exact")
@@ -88,7 +92,9 @@ impl tera::Filter for ImageFilter {
             Cow::Borrowed(&im)
         };
 
-        Ok(tera::Value::String(zpl::image_to_gf(&im, dithering)))
+        Ok(tera::Value::String(zpl::image_to_gf(
+            &im, dithering, encoding,
+        )))
     }
 
     fn is_safe(&self) -> bool {

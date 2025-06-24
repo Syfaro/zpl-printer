@@ -17,8 +17,10 @@ axum-prometheus = "0.3.3"
 base64 = "0.21.2"
 chrono = { version = "0.4.41", default-features = false }
 clap = { version = "4.3.11", features = ["derive", "env"] }
+crc16 = "0.4.0"
 dithord = "0.4.1"
 eyre = "0.6.8"
+flate2 = "1.1.2"
 hex = "0.4.3"
 image = { version = "0.25.6", default-features = false, features = ["bmp", "jpeg", "png", "webp"] }
 ipp = { version = "5.2.0", default-features = false, features = ["async-client-rustls"] }

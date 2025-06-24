@@ -1,5 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write};
 
+use base64::Engine;
+use flate2::{Compression, write::ZlibEncoder};
 use image::{DynamicImage, ImageBuffer, Luma, LumaA, buffer::ConvertBuffer, imageops};
 use itertools::Itertools;
 use nom::{
@@ -19,11 +21,23 @@ pub enum DitheringType {
     FloydSteinberg,
 }
 
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BinaryEncodingMethod {
+    #[default]
+    Hex,
+    Z64,
+}
+
 /// Convert an image to a GF instruction.
 ///
 /// This also handles the grayscale conversion, including dithering.
 #[instrument(skip(im))]
-pub fn image_to_gf(im: &DynamicImage, dithering: Option<DitheringType>) -> String {
+pub fn image_to_gf(
+    im: &DynamicImage,
+    dithering: Option<DitheringType>,
+    encoding: BinaryEncodingMethod,
+) -> String {
     // Convert image to grayscale with alpha channel. We need to make sure that
     // transparent pixels are set to white so they aren't printed.
     let im = im.to_luma_alpha8();
@@ -70,20 +84,30 @@ pub fn image_to_gf(im: &DynamicImage, dithering: Option<DitheringType>) -> Strin
 
     // Number of bytes that each line uses.
     let line_size = (width_padded / 8) as usize;
+    // Total size of uncompressed data.
+    let total_size = line_size * height as usize;
 
-    // The image data, after compression.
-    let mut field_data = String::new();
+    let field_data = match encoding {
+        BinaryEncodingMethod::Hex => hex_encoding(line_size, height, width_padded, &cleaned_image),
+        BinaryEncodingMethod::Z64 => z64_encoding(line_size, height, width_padded, &cleaned_image),
+    };
 
-    // Used to keep track of the value from the last line so we can compress it
-    // when they are the same.
-    let mut last_line = String::new();
+    format!("^GFA,{total_size},{total_size},{line_size},{field_data}")
+}
 
+// Create an iterator of byte data for each line of an image.
+fn image_to_lines(
+    line_size: usize,
+    height: u32,
+    width_padded: u32,
+    cleaned_image: &ImageBuffer<Luma<u8>, Vec<u8>>,
+) -> impl Iterator<Item = Vec<u8>> {
     // A buffer for holding bytes for the current line.
     let mut buf = Vec::with_capacity(line_size);
     // A work in progress byte that gets updated with each pixel.
     let mut byte = 0u8;
 
-    for y in 0..height {
+    (0..height).map(move |y| {
         buf.clear();
 
         for x in 0..width_padded {
@@ -106,9 +130,28 @@ pub fn image_to_gf(im: &DynamicImage, dithering: Option<DitheringType>) -> Strin
             }
         }
 
+        buf.clone()
+    })
+}
+
+// Perform hex encoding for image.
+fn hex_encoding(
+    line_size: usize,
+    height: u32,
+    width_padded: u32,
+    cleaned_image: &ImageBuffer<Luma<u8>, Vec<u8>>,
+) -> String {
+    // The image data, after compression.
+    let mut field_data = String::new();
+
+    // Used to keep track of the value from the last line so we can compress it
+    // when they are the same.
+    let mut last_line = String::new();
+
+    for line in image_to_lines(line_size, height, width_padded, cleaned_image) {
         // Now that we're done with the line, we can encode it into a hex
         // representation and compress that value.
-        let hex_buf = hex::encode_upper(&buf);
+        let hex_buf = hex::encode_upper(&line);
         let compressed_line = zpl_compress_line(&hex_buf);
 
         // ZPL compression says we can use a colon instead of needing to include
@@ -121,14 +164,9 @@ pub fn image_to_gf(im: &DynamicImage, dithering: Option<DitheringType>) -> Strin
         }
     }
 
-    let total_size = line_size * height as usize;
-    debug!(
-        total_size,
-        compressed_size = field_data.len(),
-        "got total bytes"
-    );
+    debug!(compressed_size = field_data.len(), "got total bytes");
 
-    format!("^GFA,{total_size},{total_size},{line_size},{field_data}")
+    field_data
 }
 
 /// Compress an entire line of data using the ZPL ASCII compression system.
@@ -197,6 +235,43 @@ fn zpl_repeat_code(c: char, mut count: usize) -> String {
     }
 
     format!("{s}{c}")
+}
+
+#[tracing::instrument(skip(cleaned_image))]
+fn z64_encoding(
+    line_size: usize,
+    height: u32,
+    width_padded: u32,
+    cleaned_image: &ImageBuffer<Luma<u8>, Vec<u8>>,
+) -> String {
+    // Get all image lines as a single buffer.
+    let mut buf = Vec::new();
+    for line in image_to_lines(line_size, height, width_padded, cleaned_image) {
+        buf.extend(line);
+    }
+
+    // Compress all image data.
+    let mut compressor = ZlibEncoder::new(Vec::new(), Compression::best());
+    compressor
+        .write_all(&buf)
+        .expect("should always be able to write image bytes");
+    let data = compressor
+        .finish()
+        .expect("should always be able to finish compressor");
+    tracing::trace!("compressed data was {} bytes", data.len());
+
+    // Convert compressed data to base64 string.
+    let mut image_data = String::new();
+    base64::prelude::BASE64_STANDARD.encode_string(data, &mut image_data);
+    tracing::trace!("base64 data was {} bytes", image_data.len());
+
+    // And take the CRC of that data.
+    let crc = crc16::State::<crc16::XMODEM>::calculate(image_data.as_bytes());
+    let crc = hex::encode(crc.to_be_bytes());
+    tracing::trace!("base64 data crc was {crc}");
+
+    // Finally, format into the expected format.
+    format!(":Z64:{image_data}:{crc}")
 }
 
 pub struct ZplParser {

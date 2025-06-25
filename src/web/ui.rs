@@ -24,8 +24,8 @@ use itertools::{Itertools, izip};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, CursorTrait, DbBackend, EntityTrait, FromQueryResult,
-    LoaderTrait, QueryOrder, Set, Statement,
+    ActiveModelTrait, ActiveValue::NotSet, DbBackend, EntityTrait, FromQueryResult, LoaderTrait,
+    QueryOrder, Set, Statement,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{NoneAsEmptyString, serde_as};

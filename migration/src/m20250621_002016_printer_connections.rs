@@ -1,7 +1,5 @@
 use sea_orm_migration::{prelude::*, sea_orm::DatabaseBackend};
 
-use crate::m20230628_042220_label_sizes::LabelSize;
-
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -80,10 +78,6 @@ impl MigrationTrait for Migration {
 #[derive(Iden)]
 enum Printer {
     Table,
-    Id,
-    Name,
     Address,
-    Dpmm,
-    LabelSizeId,
     Connection,
 }

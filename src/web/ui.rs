@@ -8,7 +8,11 @@ use std::{
 use askama::Template;
 use axum::{
     Form, Router,
-    extract::{Multipart, Path, Query, State, multipart::Field},
+    extract::{
+        Multipart, Path, Query, State,
+        multipart::{Field, MultipartRejection},
+        rejection::FormRejection,
+    },
     http::{Method, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
@@ -42,14 +46,14 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(|| async { Redirect::to("/labels") }))
         .route("/labels", get(labels).post(label))
-        .route("/labels/:id", put(label).delete(label))
+        .route("/labels/{id}", put(label).delete(label))
         .route("/label_sizes", post(label_sizes))
-        .route("/label_sizes/:id", delete(label_size))
+        .route("/label_sizes/{id}", delete(label_size))
         .route("/printers", get(printers).post(printers))
-        .route("/printers/:id", get(printer).put(printer))
+        .route("/printers/{id}", get(printer).put(printer))
         .route("/playground", get(playground).post(playground))
-        .route("/playground/:id", get(playground))
-        .route("/playground/print/:id", post(playground_print))
+        .route("/playground/{id}", get(playground))
+        .route("/playground/print/{id}", post(playground_print))
         .route("/history", get(history))
         .route("/alerts", get(alerts))
         .route("/images", get(images).post(images))
@@ -111,7 +115,7 @@ async fn label(
     request_type: RequestType,
     method: Method,
     path_id: Option<Path<UrlId>>,
-    form: Option<Form<PlaygroundForm>>,
+    form: Result<Form<PlaygroundForm>, FormRejection>,
 ) -> Result<Response, AppError> {
     let Form(form) = form.unwrap_or_default();
 
@@ -305,7 +309,7 @@ async fn printers(
     State(state): State<Arc<AppState>>,
     method: Method,
     request_type: RequestType,
-    form: Option<Form<PrinterForm>>,
+    form: Result<Form<PrinterForm>, FormRejection>,
 ) -> Result<Response, AppError> {
     match method {
         Method::GET => {
@@ -329,7 +333,7 @@ async fn printers(
             }))
         }
         Method::POST => {
-            let Form(form) = form.ok_or_else(|| eyre::eyre!("missing form"))?;
+            let Form(form) = form?;
             let connection = form
                 .connection
                 .ok_or_else(|| eyre::eyre!("missing connection"))?;
@@ -374,7 +378,7 @@ async fn printer(
     method: Method,
     request_type: RequestType,
     Path(id): Path<UrlId>,
-    form: Option<Form<PrinterForm>>,
+    form: Result<Form<PrinterForm>, FormRejection>,
 ) -> Result<Response, AppError> {
     let (printer, current_size) = printer::Entity::find_by_id(id)
         .find_also_related(label_size::Entity)
@@ -403,7 +407,7 @@ async fn printer(
             printer,
         })),
         Method::PUT => {
-            let Form(form) = form.ok_or_else(|| eyre::eyre!("missing form"))?;
+            let Form(form) = form?;
             let connection = form
                 .connection
                 .ok_or_else(|| eyre::eyre!("missing connection"))?;
@@ -510,7 +514,7 @@ async fn playground(
     State(state): State<Arc<AppState>>,
     path_id: Option<Path<UrlId>>,
     request_type: RequestType,
-    form: Option<Form<PlaygroundForm>>,
+    form: Result<Form<PlaygroundForm>, FormRejection>,
 ) -> Result<Response, AppError> {
     let Form(form) = form.unwrap_or_default();
     tracing::debug!("got form: {form:?}");
@@ -884,7 +888,7 @@ async fn parse_field_opt<T: serde::de::DeserializeOwned>(
 async fn images(
     State(state): State<Arc<AppState>>,
     method: Method,
-    form: Option<Multipart>,
+    form: Result<Multipart, MultipartRejection>,
 ) -> Result<Response, AppError> {
     let printers = printer::Entity::find()
         .order_by_asc(printer::Column::Name)
@@ -898,7 +902,7 @@ async fn images(
                 ..Default::default()
             },
         })),
-        (Method::POST, Some(mut form)) => {
+        (Method::POST, Ok(mut form)) => {
             let mut action: Option<String> = None;
             let mut dithering_type = zpl::DitheringType::Ordered;
             let mut encoding_method = zpl::BinaryEncodingMethod::Hex;

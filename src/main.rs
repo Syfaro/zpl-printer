@@ -2,7 +2,7 @@ use std::{
     collections::HashMap, io::Cursor, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration,
 };
 
-use axum::{Router, Server};
+use axum::Router;
 use axum_prometheus::PrometheusMetricLayer;
 use clap::Parser;
 use ipp::prelude::{AsyncIppClient, IppOperationBuilder, IppPayload, Uri};
@@ -101,9 +101,9 @@ async fn main() -> eyre::Result<()> {
     }
 
     tracing::info!("listening on {}", config.address);
-    Server::bind(&config.address)
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(token.cancelled())
+    let listener = tokio::net::TcpListener::bind(config.address).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(token.cancelled_owned())
         .await?;
 
     Ok(())
@@ -468,7 +468,7 @@ async fn send_print_job(
 
     tracing::info!("finished print job");
 
-    axum_prometheus::metrics::increment_counter!("zpl_printer_print_total");
+    axum_prometheus::metrics::counter!("zpl_printer_print_total").increment(1);
 
     Ok((history_id, verifications))
 }

@@ -2,7 +2,6 @@ mod api;
 mod ui;
 
 pub use api::routes as api_routes;
-use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
     http::{HeaderValue, StatusCode, request::Parts},
@@ -47,7 +46,6 @@ impl RequestType {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for RequestType
 where
     S: Send + Sync,

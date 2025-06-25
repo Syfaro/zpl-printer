@@ -10,9 +10,8 @@ sign-tag = true
 
 [dependencies]
 askama = { version = "0.14.0" }
-async-trait = "0.1.68"
-axum = { version = "0.6.18", features = ["multipart"] }
-axum-prometheus = "0.3.3"
+axum = { version = "0.8.4", features = ["macros", "multipart"] }
+axum-prometheus = "0.8.0"
 base64 = "0.22.1"
 chrono = { version = "0.4.41", default-features = false }
 clap = { version = "4.5.40", features = ["derive", "env"] }
@@ -41,7 +40,7 @@ tap = "1.0.1"
 tera = "1.19.0"
 tokio = { version = "1.28.2", features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7.15", default-features = false }
-tower-http = { version = "0.4.1", features = ["trace", "cors"] }
+tower-http = { version = "0.6.6", features = ["trace", "cors"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 uuid = { version = "1.4.0", features = ["v7", "serde"] }

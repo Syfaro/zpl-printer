@@ -22,11 +22,15 @@
           <fieldset>
             <legend>Dithering Type</legend>
             <label>
-              <input type="radio" name="dithering_type" value="ordered" {% if form.dithering_type == zpl::DitheringType::Ordered %}checked{% endif %}>
+              <input type="radio" name="dithering_type" value="" {% if form.dithering_type.is_none() %}checked{% endif %}>
+              None
+            </label>
+            <label>
+              <input type="radio" name="dithering_type" value="ordered" {% if form.dithering_type == Some(zpl::DitheringType::Ordered) %}checked{% endif %}>
               Ordered
             </label>
             <label>
-              <input type="radio" name="dithering_type" value="floyd_steinberg" {% if form.dithering_type == zpl::DitheringType::FloydSteinberg %}checked{% endif %}>
+              <input type="radio" name="dithering_type" value="floyd_steinberg" {% if form.dithering_type == Some(zpl::DitheringType::FloydSteinberg) %}checked{% endif %}>
               Floyd-Steinberg
             </label>
           </fieldset>

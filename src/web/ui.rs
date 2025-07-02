@@ -828,7 +828,7 @@ struct ImageForm {
     existing_image: Option<String>,
     preview: Option<String>,
     zpl: Option<String>,
-    dithering_type: zpl::DitheringType,
+    dithering_type: Option<zpl::DitheringType>,
     encoding_method: zpl::BinaryEncodingMethod,
     width: String,
     height: String,
@@ -844,7 +844,7 @@ impl Default for ImageForm {
             existing_image: None,
             preview: None,
             zpl: None,
-            dithering_type: zpl::DitheringType::Ordered,
+            dithering_type: None,
             encoding_method: zpl::BinaryEncodingMethod::Hex,
             width: "".to_string(),
             height: "".to_string(),
@@ -904,7 +904,7 @@ async fn images(
         })),
         (Method::POST, Ok(mut form)) => {
             let mut action: Option<String> = None;
-            let mut dithering_type = zpl::DitheringType::Ordered;
+            let mut dithering_type = None;
             let mut encoding_method = zpl::BinaryEncodingMethod::Hex;
             let mut src_width: Option<u32> = None;
             let mut src_height: Option<u32> = None;
@@ -921,7 +921,7 @@ async fn images(
                         image_data =
                             Some(base64::prelude::BASE64_URL_SAFE.decode(&field.bytes().await?)?)
                     }
-                    Some("dithering_type") => dithering_type = parse_field(field).await?,
+                    Some("dithering_type") => dithering_type = parse_field_opt(field).await?,
                     Some("encoding_method") => encoding_method = parse_field(field).await?,
                     Some("width") => src_width = parse_field_opt(field).await?,
                     Some("height") => src_height = parse_field_opt(field).await?,
@@ -955,7 +955,7 @@ async fn images(
                 im = im.resize(width, height, Lanczos3);
             }
 
-            let (im, height, width_padded) = zpl::process_image(&im, Some(dithering_type));
+            let (im, height, width_padded) = zpl::process_image(&im, dithering_type);
             let (field_data, line_size, total_size) =
                 zpl::encode_image(height, width_padded, encoding_method, &im);
 

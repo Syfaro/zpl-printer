@@ -2,6 +2,7 @@ use std::{borrow::Cow, collections::HashMap};
 
 use image::{DynamicImage, GenericImage, GenericImageView, imageops::FilterType::Lanczos3};
 use tera::Value;
+use tracing::{instrument, trace};
 
 use crate::zpl;
 
@@ -102,14 +103,14 @@ impl tera::Filter for ImageFilter {
     }
 }
 
-#[tracing::instrument(skip(im))]
+#[instrument(skip(im))]
 fn place_image<'a>(
     im: &'a DynamicImage,
     height: Option<u32>,
     width: Option<u32>,
 ) -> Cow<'a, DynamicImage> {
     let (im_width, im_height) = im.dimensions();
-    tracing::trace!(
+    trace!(
         width = im_width,
         height = im_height,
         "got resized image dimensions"
@@ -118,9 +119,7 @@ fn place_image<'a>(
     let (height, width, placement_x, placement_y) = match (height, width) {
         (Some(height), Some(width)) => {
             if im_width == width && im_height == height {
-                tracing::trace!(
-                    "requested height and width exactly matched resized height and width"
-                );
+                trace!("requested height and width exactly matched resized height and width");
                 return Cow::Borrowed(im);
             }
 
@@ -133,7 +132,7 @@ fn place_image<'a>(
         }
         (Some(height), _) => {
             if im_height == height {
-                tracing::trace!("requested height exactly matched resized height");
+                trace!("requested height exactly matched resized height");
                 return Cow::Borrowed(im);
             }
 
@@ -141,24 +140,21 @@ fn place_image<'a>(
         }
         (_, Some(width)) => {
             if im_width == width {
-                tracing::trace!("requested width exactly matched resized width");
+                trace!("requested width exactly matched resized width");
                 return Cow::Borrowed(im);
             }
 
             (im_height, width, (width - im_width) / 2, 0)
         }
         (None, None) => {
-            tracing::trace!("no requested height and width");
+            trace!("no requested height and width");
             return Cow::Borrowed(im);
         }
     };
 
-    tracing::trace!(
+    trace!(
         height,
-        width,
-        placement_x,
-        placement_y,
-        "calculated new size and placements"
+        width, placement_x, placement_y, "calculated new size and placements"
     );
 
     let mut new_im = image::ImageBuffer::from_pixel(width, height, image::Rgba([255, 255, 255, 0]));

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     error::Error,
+    io::{BufWriter, Cursor},
     net::SocketAddr,
     sync::Arc,
 };
@@ -13,7 +14,7 @@ use axum::{
         multipart::{Field, MultipartRejection},
         rejection::FormRejection,
     },
-    http::{Method, StatusCode},
+    http::{HeaderValue, Method, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
 };
@@ -21,24 +22,28 @@ use base64::Engine;
 use image::{EncodableLayout, ImageEncoder, imageops::FilterType::Lanczos3};
 use ipp::prelude::{AsyncIppClient, IppOperationBuilder};
 use itertools::{Itertools, izip};
+use lru::LruCache;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, DbBackend, EntityTrait, FromQueryResult, LoaderTrait,
-    QueryOrder, Set, Statement,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DbBackend, EntityTrait, FromQueryResult,
+    LoaderTrait, QueryFilter, QueryOrder, Set, Statement,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{NoneAsEmptyString, serde_as};
+use sha2::{Digest, Sha256};
 use tap::TapFallible;
-use tokio::try_join;
+use tokio::{sync::Mutex, try_join};
+use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 use crate::{
     AppError,
     entities::*,
-    render_zpl, send_print_job,
     template::{VariableExtractor, render_label},
+    transport::TransportAction,
     web::{AppState, AsUrl, RequestType, UrlId, hx_load},
+    weblink::{self, ZebraChannel},
     zpl,
 };
 
@@ -50,7 +55,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/label_sizes", post(label_sizes))
         .route("/label_sizes/{id}", delete(label_size))
         .route("/printers", get(printers).post(printers))
-        .route("/printers/{id}", get(printer).put(printer))
+        .route("/printers/{id}", get(printer).put(printer).post(printer))
+        .route("/certificates/{id}", delete(certificate))
         .route("/playground", get(playground).post(playground))
         .route("/playground/{id}", get(playground))
         .route("/playground/print/{id}", post(playground_print))
@@ -195,7 +201,7 @@ async fn label_sizes(
     let label_size = label_size::Entity::insert(label_size)
         .exec(&state.db)
         .await?;
-    tracing::info!(id = %label_size.last_insert_id, "inserted new label size");
+    info!(id = %label_size.last_insert_id, "inserted new label size");
 
     Ok(Redirect::to("/labels").into_response())
 }
@@ -282,7 +288,9 @@ pub enum PrinterConnection {
     Cups { uri: String },
 }
 
-async fn cups_devices(ipp: Option<&AsyncIppClient>) -> eyre::Result<Option<Vec<(String, String)>>> {
+async fn cups_devices(
+    ipp: Option<&Arc<AsyncIppClient>>,
+) -> eyre::Result<Option<Vec<(String, String)>>> {
     let devices = if let Some(ipp) = ipp.as_ref() {
         let resp = ipp.send(IppOperationBuilder::cups().get_printers()).await?;
 
@@ -334,9 +342,6 @@ async fn printers(
         }
         Method::POST => {
             let Form(form) = form?;
-            let connection = form
-                .connection
-                .ok_or_else(|| eyre::eyre!("missing connection"))?;
 
             let label_size_id = if let Some(current_size) = form.current_size {
                 Set(label_size::Entity::find_by_id(current_size)
@@ -355,7 +360,7 @@ async fn printers(
                 name: Set(form.name),
                 dpmm: Set(form.dpmm),
                 label_size_id,
-                connection: Set(serde_json::to_value(connection)?),
+                connection: Set(form.connection.map(serde_json::to_value).transpose()?),
             };
 
             printer.insert(&state.db).await?;
@@ -370,6 +375,8 @@ async fn printers(
 #[template(path = "printers/show.html")]
 struct PrinterTemplate {
     printer: printer::Model,
+    weblink_enabled: bool,
+    certificates: Vec<web_link_certificate::Model>,
     form: PrinterFormTemplate,
 }
 
@@ -386,6 +393,21 @@ async fn printer(
         .await?
         .ok_or_else(|| eyre::eyre!("unknown printer"))?;
 
+    let certificates = if state.weblink.is_some() {
+        web_link_certificate::Entity::find()
+            .filter(web_link_certificate::Column::PrinterId.eq(id.0))
+            .order_by_with_nulls(
+                web_link_certificate::Column::LastPingAt,
+                sea_orm::Order::Desc,
+                migration::NullOrdering::Last,
+            )
+            .order_by_desc(web_link_certificate::Column::CreatedAt)
+            .all(&state.db)
+            .await?
+    } else {
+        Vec::new()
+    };
+
     let label_sizes = label_size::Entity::find()
         .order_by_asc(label_size::Column::Width)
         .order_by_asc(label_size::Column::Height)
@@ -400,22 +422,63 @@ async fn printer(
                 label_sizes,
 
                 unique_id: printer.unique_id.clone().unwrap_or_default(),
-                connection: serde_json::from_value(printer.connection.clone())?,
+                connection: printer
+                    .connection
+                    .clone()
+                    .map(serde_json::from_value)
+                    .transpose()?,
                 name: printer.name.clone(),
                 dpmm: printer.dpmm,
             },
             printer,
+            weblink_enabled: state.weblink.is_some(),
+            certificates,
         })),
+        Method::POST => {
+            let weblink_state = state.weblink.as_ref().unwrap();
+            let (cert_pem, cert_key_pair, created_at) =
+                weblink::generate_printer_cert(&state, &printer).await?;
+
+            let entries = [
+                ("WEBLINK1_CA.NRD", weblink_state.root_ca.public_key.clone()),
+                ("WEBLINK1_CERT.NRD", cert_pem),
+                ("WEBLINK1_KEY.NRD", cert_key_pair.serialize_pem()),
+            ];
+
+            let mut archive = tar::Builder::new(BufWriter::new(Vec::new()));
+            for (name, data) in entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_path(name)?;
+                header.set_size(data.len() as u64);
+                header.set_mode(0o600);
+                header.set_mtime(created_at.unix_timestamp() as u64);
+                header.set_cksum();
+                archive.append(&header, Cursor::new(data))?;
+            }
+
+            let buf = archive.into_inner()?.into_inner()?;
+
+            let mut resp = Response::new(buf.into());
+            resp.headers_mut().append(
+                "content-type",
+                HeaderValue::from_static("application/x-tar"),
+            );
+            resp.headers_mut().append(
+                "content-disposition",
+                HeaderValue::from_str(&format!(
+                    "attachment; filename={}.tar",
+                    printer.unique_id.unwrap_or(printer.name)
+                ))?,
+            );
+            Ok(resp)
+        }
         Method::PUT => {
             let Form(form) = form?;
-            let connection = form
-                .connection
-                .ok_or_else(|| eyre::eyre!("missing connection"))?;
 
             let mut printer: printer::ActiveModel = printer.into();
             printer.unique_id = Set(form.unique_id);
             printer.name = Set(form.name);
-            printer.connection = Set(serde_json::to_value(connection)?);
+            printer.connection = Set(form.connection.map(serde_json::to_value).transpose()?);
             printer.dpmm = Set(form.dpmm);
             printer.label_size_id = if let Some(current_size) = form.current_size {
                 Set(Some(current_size.into()))
@@ -426,6 +489,54 @@ async fn printer(
             printer.update(&state.db).await?;
 
             hx_load(&request_type, false, "/labels")
+        }
+        _ => Err(eyre::eyre!("unknown method").into()),
+    }
+}
+
+async fn certificate(
+    State(state): State<Arc<AppState>>,
+    method: Method,
+    request_type: RequestType,
+    Path(id): Path<UrlId>,
+) -> Result<Response, AppError> {
+    let certificate_model = web_link_certificate::Entity::find_by_id(id)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| eyre::eyre!("unknown certificate"))?;
+
+    match method {
+        Method::DELETE => {
+            let mut certificate: web_link_certificate::ActiveModel =
+                certificate_model.clone().into();
+            certificate.revoked_at = Set(Some(chrono::Utc::now().into()));
+            certificate.update(&state.db).await?;
+
+            if let Some(weblink) = state.weblink.as_ref()
+                && let Some(printer_id) = certificate_model.printer_id
+            {
+                const CHANNEL_TYPES: [ZebraChannel; 3] = [
+                    ZebraChannel::Main,
+                    ZebraChannel::ConfigV1,
+                    ZebraChannel::RawV1,
+                ];
+
+                for channel_type in CHANNEL_TYPES {
+                    let _ = weblink
+                        .transport
+                        .perform_action(&(printer_id, channel_type), TransportAction::Disconnect)
+                        .await;
+                }
+            }
+
+            hx_load(
+                &request_type,
+                false,
+                &format!(
+                    "/printers/{}",
+                    certificate_model.printer_id.unwrap().as_url()
+                ),
+            )
         }
         _ => Err(eyre::eyre!("unknown method").into()),
     }
@@ -517,7 +628,7 @@ async fn playground(
     form: Result<Form<PlaygroundForm>, FormRejection>,
 ) -> Result<Response, AppError> {
     let Form(form) = form.unwrap_or_default();
-    tracing::debug!("got form: {form:?}");
+    debug!("got form: {form:?}");
 
     let PlaygroundForm {
         id: form_id,
@@ -608,7 +719,7 @@ async fn playground(
     let image = if let Ok(zpl) = &rendered {
         render_zpl(&state.image_cache, &state.client, zpl, &label_size, dpmm)
             .await
-            .tap_err(|err| tracing::error!("could not get zpl preview: {err}"))
+            .tap_err(|err| error!("could not get zpl preview: {err}"))
             .ok()
             .as_deref()
             .map(encode_image_html)
@@ -645,31 +756,16 @@ async fn playground_print(
         .await?
         .ok_or_else(|| eyre::eyre!("unknown printer"))?;
 
-    let (label_id, real_label) = if let Some(id) = form.id {
-        (id.into(), true)
-    } else {
-        (Uuid::now_v7(), false)
-    };
-
-    send_print_job(
-        &state.db,
-        state.ipp.as_ref(),
-        printer,
-        label::Model {
-            id: label_id,
-            name: "".to_string(),
-            label_size_id: form
-                .label_size_id
-                .map(Into::into)
-                .unwrap_or_else(Uuid::now_v7),
-            dpmm: form.dpmm,
-            zpl: form.zpl,
-        },
-        form.fields,
-        state.skip,
-        real_label,
-    )
-    .await?;
+    state
+        .print
+        .send_label(
+            printer,
+            &form.zpl,
+            form.fields,
+            form.label_size_id.map(Into::into),
+            form.id.map(Into::into),
+        )
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -933,7 +1029,7 @@ async fn images(
                 }
             }
 
-            tracing::debug!(
+            debug!(
                 ?action,
                 ?dithering_type,
                 ?encoding_method,
@@ -971,26 +1067,14 @@ async fn images(
                     .await?
                     .ok_or_else(|| eyre::eyre!("missing printer"))?;
 
-                let label = label::Model {
-                    id: Uuid::nil(),
-                    name: "Store Graphic".to_string(),
-                    label_size_id: printer.label_size_id.unwrap_or_default(),
-                    dpmm: 0,
-                    zpl: format!(
-                        "~DG{storage_device}{file_name}.GRF,{total_size},{line_size},{field_data}"
-                    ),
-                };
+                let zpl = format!(
+                    "~DG{storage_device}{file_name}.GRF,{total_size},{line_size},{field_data}"
+                );
 
-                crate::send_print_job(
-                    &state.db,
-                    state.ipp.as_ref(),
-                    printer,
-                    label,
-                    Default::default(),
-                    state.skip,
-                    false,
-                )
-                .await?;
+                state
+                    .print
+                    .send_label(printer, &zpl, Default::default(), None, None)
+                    .await?;
             }
 
             let mut buf = Vec::new();
@@ -1022,4 +1106,50 @@ async fn images(
         }
         _ => Err(eyre::eyre!("unknown method").into()),
     }
+}
+
+#[instrument(skip(image_cache, client, zpl), fields(key))]
+async fn render_zpl(
+    image_cache: &Mutex<LruCache<[u8; 32], Vec<u8>>>,
+    client: &reqwest::Client,
+    zpl: &str,
+    label_size: &label_size::Model,
+    dpmm: i16,
+) -> eyre::Result<Vec<u8>> {
+    let mut hasher = Sha256::new();
+    hasher.update(dpmm.to_ne_bytes());
+    hasher.update(label_size.id.as_bytes());
+    hasher.update(zpl.as_bytes());
+    let key: [u8; 32] = hasher.finalize().into();
+    tracing::Span::current().record("key", hex::encode(key));
+
+    {
+        let mut cache = image_cache.lock().await;
+
+        if let Some(image) = cache.get(&key) {
+            info!("had image cached");
+            return Ok(image.to_owned());
+        }
+    }
+
+    let url = format!(
+        "https://api.labelary.com/v1/printers/{dpmm}dpmm/labels/{width}x{height}/0/",
+        width = label_size.width,
+        height = label_size.height
+    );
+    debug!(url, "making request to url");
+
+    let data = client
+        .post(url)
+        .body(zpl.to_owned())
+        .header("accept", "image/png")
+        .send()
+        .await?
+        .bytes()
+        .await?;
+
+    image_cache.lock().await.put(key, data.to_vec());
+    debug!("added image to cache");
+
+    Ok(data.to_vec())
 }

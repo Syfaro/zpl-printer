@@ -1,6 +1,9 @@
 mod api;
 mod ui;
 
+use std::sync::Arc;
+
+use age::x25519::Identity;
 pub use api::routes as api_routes;
 use axum::{
     extract::FromRequestParts,
@@ -13,18 +16,32 @@ use lru::LruCache;
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use tokio::sync::Mutex;
+use tokio_util::{sync::CancellationToken, task::task_tracker::TaskTracker};
 use uuid::Uuid;
 
-use crate::AppError;
+use crate::{
+    AppError, alerts::AlertHandler, entities::web_link_certificate, print::Print,
+    transport::Transport,
+};
 pub use ui::PrinterConnection;
 pub use ui::routes as ui_routes;
 
 pub struct AppState {
+    pub token: CancellationToken,
     pub db: DatabaseConnection,
+    pub print: Print,
+    pub ipp: Option<Arc<AsyncIppClient>>,
+    pub weblink: Option<Arc<WebLinkState>>,
+    pub alert_handler: Arc<AlertHandler>,
     pub image_cache: Mutex<LruCache<[u8; 32], Vec<u8>>>,
     pub client: reqwest::Client,
-    pub skip: bool,
-    pub ipp: Option<AsyncIppClient>,
+}
+
+pub struct WebLinkState {
+    pub root_ca: web_link_certificate::Model,
+    pub root_encryption_identity: Identity,
+    pub transport: Box<dyn Transport>,
+    pub tasks: TaskTracker,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -106,6 +123,7 @@ pub trait AsUrl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+
 struct UrlId(Uuid);
 
 impl AsUrl for UrlId {
@@ -171,5 +189,14 @@ impl<'de> Deserialize<'de> for UrlId {
             .map_err(|_err| serde::de::Error::custom("incorrectly sized base64 data"))?;
 
         Ok(Self(Uuid::from_bytes(data)))
+    }
+}
+
+impl serde::Serialize for UrlId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }

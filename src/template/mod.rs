@@ -4,6 +4,7 @@ use tera::{
     Context, Tera, Value,
     ast::{Expr, ExprVal, FunctionCall, In, LogicExpr, MacroCall, MathExpr, Node},
 };
+use tracing::{instrument, trace, trace_span};
 
 mod images;
 
@@ -98,7 +99,7 @@ impl VariableExtractor {
                 Node::VariableBlock(_, expr) => self.expand_expr(expr, in_loop),
                 Node::MacroDefinition(_, block, _) => self.expand_node(block.body, in_loop),
                 Node::Set(_, set) => {
-                    let _span = tracing::trace_span!("set node", key = set.key).entered();
+                    let _span = trace_span!("set node", key = set.key).entered();
 
                     self.add_variable(set.key, in_loop);
                     self.expand_expr(set.value, in_loop);
@@ -122,12 +123,12 @@ impl VariableExtractor {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[instrument(skip(self))]
     fn add_variable(&mut self, name: String, in_loop: bool) {
         if self.variables.contains(&name) {
-            tracing::trace!("variable was already known");
+            trace!("variable was already known");
         } else {
-            tracing::trace!("variables did not contain key, adding to exclusions");
+            trace!("variables did not contain key, adding to exclusions");
             self.exclusions.insert(name);
         }
     }
@@ -139,17 +140,17 @@ impl VariableExtractor {
     fn expand_expr_val(&mut self, expr_val: ExprVal, in_loop: bool) {
         match expr_val {
             ExprVal::Ident(name) => {
-                let _span = tracing::trace_span!("expr ident", name).entered();
+                let _span = trace_span!("expr ident", name).entered();
 
                 if in_loop && Self::LOOP_VARIABLES.contains(&name.as_str()) {
-                    tracing::trace!("in loop and variable was loop.");
+                    trace!("in loop and variable was loop.");
                     return;
                 }
 
                 if self.exclusions.contains(&name) {
-                    tracing::trace!("name was in exclusions");
+                    trace!("name was in exclusions");
                 } else {
-                    tracing::trace!("name was not in exclusions");
+                    trace!("name was not in exclusions");
                     self.variables.insert(name);
                 }
             }

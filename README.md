@@ -22,9 +22,8 @@ Labels can be saved and then printed via API.
 ### Host Verification (`^HV`)
 
 When a label template contains the `^HV` command, this tool will automatically
-try to parse the output to extract the values. When using it, the number of
-bytes must be set exactly correct otherwise the extraction will fail.
-Additionally, all fields must be set to apply to each label (the "L" flag).
+try to parse the output to extract the values. If a suffix is not set, it will
+read until the next prefix or assume that the length is fixed.
 
 This feature is not supported when printer is configured using CUPS.
 
@@ -38,13 +37,74 @@ alert targets.
 
 ## API
 
-### `POST /api/v1/print`
+### `GET /api/v1/printers`
+
+List printers.
+
+```jsonc
+{
+    "printers": [
+        {
+            "id": "AZw0bQq_cRK-k0G_Vz9eFA", // Internal ID
+            "name": "Printer #1",           // Generic name
+            "unique_id": "XXXXXXXXXXXXXX",  // Unique ID, or serial number
+            "connection_type": "weblink",   // How printer is configured, weblink, network, or cups
+            "dpmm": 8,
+            "label_size": {
+                "id": "AZw0bS3Nd6CIRuCD8skG8A", // Internal ID
+                "width": "4",                   // Label width, in inches
+                "height": "6",                  // Label height, in inches
+            },
+            "web_link_certificates": [
+                {
+                    "id": "AZw0qk9dc9GLLtwZvRJtVg",
+                    "created_at": "2026-02-06T20:35:02Z",
+                    "expires_at": "2027-02-06T20:35:02Z",
+                    "revoked_at": null,
+                    "last_ping_at": null,
+                    "serial_number": "20:b6:92:a6:cf:2a:0b:5d:5a:eb:7e:0d:76:11:c9:46:46:e2:77:ef",
+                }
+            ]
+        }
+    ]
+}
+```
+
+### `GET /api/v1/printers/:id`
+
+Get a specific printer.
+
+```jsonc
+{
+    "id": "AZw0bQq_cRK-k0G_Vz9eFA", // Internal ID
+    "name": "Printer #1",           // Generic name
+    "unique_id": "XXXXXXXXXXXXXX",  // Unique ID, or serial number
+    "connection_type": "weblink",   // How printer is configured, weblink, network, or cups
+    "dpmm": 8,
+    "label_size": {
+        "id": "AZw0bS3Nd6CIRuCD8skG8A", // Internal ID
+        "width": "4",                   // Label width, in inches
+        "height": "6",                  // Label height, in inches
+    },
+    "web_link_certificates": [
+        {
+            "id": "AZw0qk9dc9GLLtwZvRJtVg",
+            "created_at": "2026-02-06T20:35:02Z",
+            "expires_at": "2027-02-06T20:35:02Z",
+            "revoked_at": null,
+            "last_ping_at": null,
+            "serial_number": "20:b6:92:a6:cf:2a:0b:5d:5a:eb:7e:0d:76:11:c9:46:46:e2:77:ef",
+        }
+    ]
+}
+```
+
+### `POST /api/v1/printers/:id/print`
 
 Prints a label. It requires a JSON-encoded body with the following contents:
 
 ```jsonc
 {
-    "printer_id": "", // The printer's ID
     "label_id": "",   // The label's ID
     "data": {}        // Arbitrary key-value data passed to label's template
 }
@@ -70,3 +130,19 @@ values, they will be returned and the response will have a status code of 200:
 
 Responses also set a `x-history-id` header with the ID of the saved history
 object.
+
+### `POST /api/v1/printers/:id/send`
+
+Send raw data to the printer without any processing.
+
+Returns a 204 No Content on success.
+
+## Weblink
+
+This service can provide an endpoint for Weblink connections. After generating
+your secret and certificate authority, you can use the web UI to issue
+certificates for printers. Printers can then be configured to connect to the
+Weblink address with a path of `/weblink`.
+
+Note that if you do not configure a dedicated Weblink address, the main address
+will start listening over TLS.

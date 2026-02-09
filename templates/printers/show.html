@@ -1,5 +1,3 @@
-{% import "macros.html" as macros %}
-
 {% extends "layout.html" %}
 
 {% block content %}
@@ -15,6 +13,57 @@
     {{ form|safe }}
 
     <input type="submit" value="Update">
+  </form>
+
+  {% if weblink_enabled %}
+    <table>
+      <thead>
+        <tr>
+          <th>Issued At</th>
+          <th>Expires At</th>
+          <th>Revoked At</th>
+          <th>Last Ping</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for certificate in certificates %}
+          <tr>
+            <td>{{ certificate.created_at }}</td>
+            <td>{{ certificate.expires_at }}</td>
+            <td>
+              {% match certificate.revoked_at %}
+              {% when Some with (revoked_at) %}
+              {{ revoked_at }}
+              {% else %}
+              N/A
+              {% endmatch %}
+            </td>
+            <td>
+              {% match certificate.last_ping_at %}
+              {% when Some with (last_ping_at) %}
+              {{ last_ping_at }}
+              {% else %}
+              N/A
+              {% endmatch %}
+            </td>
+            <td>
+              {% match certificate.revoked_at %}
+              {% when None %}
+                <form hx-delete="/certificates/{{ certificate.id.as_url() }}">
+                  <input type="submit" value="Revoke">
+                </form>
+              {% else %}
+              {% endmatch %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <form method="post">
+    <input type="submit" value="Issue Weblink certificate">
   </form>
 </main>
 {% endblock %}

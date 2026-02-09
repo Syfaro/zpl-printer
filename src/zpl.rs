@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Write};
+use std::io::Write;
 
 use base64::Engine;
 use flate2::{Compression, write::ZlibEncoder};
@@ -12,7 +12,7 @@ use nom::{
     combinator::opt,
     multi::many0,
 };
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -259,7 +259,7 @@ fn zpl_repeat_code(c: char, mut count: usize) -> String {
     format!("{s}{c}")
 }
 
-#[tracing::instrument(skip(cleaned_image))]
+#[instrument(skip(cleaned_image))]
 fn z64_encoding(
     line_size: usize,
     height: u32,
@@ -280,25 +280,27 @@ fn z64_encoding(
     let data = compressor
         .finish()
         .expect("should always be able to finish compressor");
-    tracing::trace!("compressed data was {} bytes", data.len());
+    trace!("compressed data was {} bytes", data.len());
 
     // Convert compressed data to base64 string.
     let mut image_data = String::new();
     base64::prelude::BASE64_STANDARD.encode_string(data, &mut image_data);
-    tracing::trace!("base64 data was {} bytes", image_data.len());
+    trace!("base64 data was {} bytes", image_data.len());
 
     // And take the CRC of that data.
     let crc = crc16::State::<crc16::XMODEM>::calculate(image_data.as_bytes());
     let crc = hex::encode(crc.to_be_bytes());
-    tracing::trace!("base64 data crc was {crc}");
+    trace!("base64 data crc was {crc}");
 
     // Finally, format into the expected format.
     format!(":Z64:{image_data}:{crc}")
 }
 
+#[derive(Debug)]
 pub struct ZplParser {
     caret: char,
     tilde: char,
+    in_label: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -308,39 +310,18 @@ pub struct ZplCommand<'a> {
     pub args: &'a str,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZplLabel<'a> {
+    pub commands: &'a [ZplCommand<'a>],
+}
+
 #[derive(Clone, Debug)]
 pub struct ZplHostVerification<'a> {
+    pub field_no: u16,
     pub length: usize,
     pub prefix: Option<&'a str>,
     pub suffix: Option<&'a str>,
     pub applies_to: Option<char>,
-}
-
-impl<'a> ZplHostVerification<'a> {
-    pub fn from_commands(commands: &[ZplCommand<'a>]) -> HashMap<u16, ZplHostVerification<'a>> {
-        commands
-            .iter()
-            .filter(|command| command.start == '^' && command.name == "HV")
-            .filter_map(|hv| {
-                let mut args = hv.args.splitn(5, ',');
-                let field_no = args.next().unwrap_or("0").parse().ok()?;
-                let length = args.next().unwrap_or("64").parse().ok()?;
-                let prefix = args.next();
-                let suffix = args.next();
-                let applies_to = args.next().and_then(|applies_to| applies_to.chars().next());
-
-                Some((
-                    field_no,
-                    ZplHostVerification {
-                        length,
-                        prefix,
-                        suffix,
-                        applies_to,
-                    },
-                ))
-            })
-            .collect()
-    }
 }
 
 impl Default for ZplParser {
@@ -348,6 +329,7 @@ impl Default for ZplParser {
         Self {
             caret: '^',
             tilde: '~',
+            in_label: false,
         }
     }
 }
@@ -362,9 +344,37 @@ impl ZplParser {
             .map_err(|err| eyre::eyre!("could not parse zpl: {err}"))
     }
 
-    #[tracing::instrument(skip(self))]
+    pub fn split_labels<'a>(mut commands: &'a [ZplCommand<'a>]) -> Vec<ZplLabel<'a>> {
+        let mut labels = Vec::new();
+
+        while !commands.is_empty() {
+            let (label_commands, remaining) =
+                match commands.iter().position(|command| command.is('^', "XZ")) {
+                    Some(end_index) => commands
+                        .split_at_checked(end_index + 1)
+                        .map(|(label_commands, remaining)| (label_commands, Some(remaining)))
+                        .unwrap_or_else(|| (commands, None)),
+                    None => (commands, None),
+                };
+
+            labels.push(ZplLabel {
+                commands: label_commands,
+            });
+
+            if let Some(remaining) = remaining {
+                commands = remaining;
+            } else {
+                break;
+            }
+        }
+
+        labels
+    }
+
+    #[instrument]
     fn parse_command<'a>(&mut self, input: &'a str) -> nom::IResult<&'a str, ZplCommand<'a>> {
         let (input, _) = multispace0(input)?;
+
         let (input, command) = opt(alt((
             (char(self.caret), tag_no_case([b'A', b'@'].as_slice())),
             (char(self.caret), tag_no_case([b'A'].as_slice())),
@@ -378,40 +388,151 @@ impl ZplParser {
                 (alt((char(self.caret), char(self.tilde))), take(2usize)).parse(input)?;
             (input, caret, name)
         };
-        tracing::trace!(%start, name, "identified command");
+        trace!(%start, name, "identified command");
         let normalized_command_start = if start == self.caret { '^' } else { '~' };
 
         let (input, args) = if start == self.caret && name.eq_ignore_ascii_case("CC") {
             let (input, arg) = take(1usize)(input)?;
-            tracing::trace!("changing caret symbol to {arg}");
+            trace!("changing caret symbol to {arg}");
             self.caret = arg.chars().next().unwrap();
             (input, arg)
         } else if start == self.caret && name.eq_ignore_ascii_case("CT") {
             let (input, arg) = take(1usize)(input)?;
-            tracing::trace!("changing tilde symbol to {arg}");
+            trace!("changing tilde symbol to {arg}");
             self.tilde = arg.chars().next().unwrap();
             (input, arg)
         } else {
             let (input, args) = opt(is_not([self.caret, self.tilde].as_slice())).parse(input)?;
             let args = args.unwrap_or_default();
-            tracing::trace!(args, "got command arguments");
+            trace!(args, "got command arguments");
             (input, args)
         };
 
-        Ok((
-            input,
-            ZplCommand {
-                start: normalized_command_start,
-                name,
-                args: args.trim(),
-            },
-        ))
+        let command = ZplCommand {
+            start: normalized_command_start,
+            name,
+            args: args.trim(),
+        };
+
+        if command.is('^', "XA") {
+            self.in_label = true;
+        } else if command.is('^', "XZ") {
+            self.in_label = false;
+        }
+
+        Ok((input, command))
+    }
+}
+
+impl<'a> ZplCommand<'a> {
+    pub fn is(&self, start: char, name: &str) -> bool {
+        debug_assert!(start == '^' || start == '~', "unknown start character");
+        self.start == start && self.name == name
+    }
+}
+
+impl<'a> ZplLabel<'a> {
+    pub fn quantity(&self) -> usize {
+        self.commands
+            .iter()
+            .rfind(|command| command.is('^', "PQ"))
+            .and_then(|command| command.args.parse().ok())
+            .unwrap_or(1)
+    }
+
+    pub fn iter_host_verifications(
+        &self,
+        host_verifications: &'a [ZplHostVerification<'a>],
+    ) -> ZplLabelHostVerificationIter<'a> {
+        ZplLabelHostVerificationIter::new(host_verifications, self.quantity())
+    }
+}
+
+impl<'a> ZplHostVerification<'a> {
+    pub fn from_commands(commands: &[ZplCommand<'a>]) -> Vec<ZplHostVerification<'a>> {
+        commands
+            .iter()
+            .filter(|command| command.is('^', "HV"))
+            .filter_map(|hv| {
+                let mut args = hv.args.splitn(5, ',');
+                let field_no = args.next().unwrap_or("0").parse().ok()?;
+                let length = args.next().unwrap_or("64").parse().ok()?;
+                let prefix = args.next().filter(|s| !s.is_empty());
+                let suffix = args.next().filter(|s| !s.is_empty());
+                let applies_to = args.next().and_then(|applies_to| applies_to.chars().next());
+
+                Some(ZplHostVerification {
+                    field_no,
+                    length,
+                    prefix,
+                    suffix,
+                    applies_to,
+                })
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+pub struct ZplLabelHostVerificationIter<'a> {
+    quantity: usize,
+    host_verifications: &'a [ZplHostVerification<'a>],
+    label_verifications: Vec<&'a ZplHostVerification<'a>>,
+
+    current_label: usize,
+    current_verification: usize,
+}
+
+impl<'a> ZplLabelHostVerificationIter<'a> {
+    fn new(host_verifications: &'a [ZplHostVerification<'a>], quantity: usize) -> Self {
+        let label_verifications = host_verifications
+            .iter()
+            .filter(|hv| hv.applies_to == Some('L'))
+            .collect();
+
+        Self {
+            quantity,
+            host_verifications,
+            label_verifications,
+
+            current_label: 1,
+            current_verification: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for ZplLabelHostVerificationIter<'a> {
+    type Item = (usize, &'a ZplHostVerification<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // If we're on the last label, all host verifications are valid.
+        // Otherwise, we need to only consider label-level verifications.
+        let current_verification = if self.current_label == self.quantity {
+            self.host_verifications.get(self.current_verification)
+        } else {
+            self.label_verifications
+                .get(self.current_verification)
+                .copied()
+        };
+
+        // When the value exists we can directly use it. If it doesn't we need
+        // to reset positions, advance to the next label, and try again.
+        if let Some(verification) = current_verification {
+            self.current_verification += 1;
+            Some((self.current_label, verification))
+        } else if self.current_label < self.quantity {
+            self.current_label += 1;
+            self.current_verification = 0;
+            self.next()
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::zpl::{ZplCommand, ZplParser};
+    use crate::zpl::{ZplCommand, ZplHostVerification, ZplLabel, ZplParser};
 
     #[test]
     fn test_parse_basic_commands() {
@@ -482,5 +603,88 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn test_split_labels() {
+        let input = "^XA^FS^XZ";
+        let commands = ZplParser::parse(input).unwrap();
+        let labels = ZplParser::split_labels(&commands);
+
+        assert_eq!(
+            labels,
+            vec![ZplLabel {
+                commands: &[
+                    ZplCommand {
+                        start: '^',
+                        name: "XA",
+                        args: ""
+                    },
+                    ZplCommand {
+                        start: '^',
+                        name: "FS",
+                        args: ""
+                    },
+                    ZplCommand {
+                        start: '^',
+                        name: "XZ",
+                        args: ""
+                    }
+                ]
+            }]
+        );
+
+        let input = "^XA^FS^XZ^XA^FD";
+        let commands = ZplParser::parse(input).unwrap();
+        let labels = ZplParser::split_labels(&commands);
+
+        assert_eq!(
+            labels,
+            vec![
+                ZplLabel {
+                    commands: &[
+                        ZplCommand {
+                            start: '^',
+                            name: "XA",
+                            args: ""
+                        },
+                        ZplCommand {
+                            start: '^',
+                            name: "FS",
+                            args: ""
+                        },
+                        ZplCommand {
+                            start: '^',
+                            name: "XZ",
+                            args: ""
+                        }
+                    ]
+                },
+                ZplLabel {
+                    commands: &[
+                        ZplCommand {
+                            start: '^',
+                            name: "XA",
+                            args: ""
+                        },
+                        ZplCommand {
+                            start: '^',
+                            name: "FD",
+                            args: ""
+                        },
+                    ]
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_iter_host_verifications() {
+        let input = "^XA^HV1,20,[,],F^FS^HV2,10,START(,),L^FS^PQ2^XZ";
+        let commands = ZplParser::parse(input).unwrap();
+        let label = ZplParser::split_labels(&commands).pop().unwrap();
+        let host_verifications = ZplHostVerification::from_commands(&commands);
+        let hvs: Vec<_> = label.iter_host_verifications(&host_verifications).collect();
+        println!("{hvs:?}");
     }
 }
